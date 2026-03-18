@@ -48,16 +48,7 @@ jobs:
           fi
 
           if [ -z "${CUSTOM_DOMAIN}" ]; then
-            python3 - <<'PY'
-from pathlib import Path
-import os
-
-index = Path("publish/wwwroot/index.html")
-content = index.read_text(encoding="utf-8")
-repo_name = os.environ["GITHUB_REPOSITORY"].split("/", 1)[1]
-content = content.replace('<base href="/" />', f'<base href="/{repo_name}/" />')
-index.write_text(content, encoding="utf-8")
-PY
+            python3 -c "from pathlib import Path; import os; p = Path('publish/wwwroot/index.html'); t = p.read_text(encoding='utf-8'); r = os.environ['GITHUB_REPOSITORY'].split('/', 1)[1]; p.write_text(t.replace('<base href=\"/\" />', f'<base href=\"/{r}/\" />'), encoding='utf-8')"
           else
             echo "${CUSTOM_DOMAIN}" > publish/wwwroot/CNAME
           fi
