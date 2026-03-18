@@ -1,0 +1,326 @@
+﻿@page "/"
+@inject IArchiveService ArchiveService
+@inject IReportParserService ParserService
+@inject IReportExportService ExportService
+@inject ISupabaseReportService SupabaseReportService
+
+<PageTitle>FRP Helper</PageTitle>
+
+<div class="screen">
+	<section class="pane">
+		<header class="pane-header">
+			<h2>Dosya Yükleme</h2>
+			<span class="hint">Çoklu seçim desteklenir</span>
+		</header>
+		<div class="pane-content">
+			<div class="drop-zone @(_isDragging ? "dragging" : string.Empty)"
+				 @ondragover="OnDragOver"
+				 @ondragleave="OnDragLeave"
+				 @ondrop="OnDragLeave"
+				 @ondrop:preventDefault>
+				<div class="drop-text">
+					<div><strong>FRP/FRX/XML/ZIP/RAR</strong> dosyalarını buraya bırakın</div>
+					<div class="hint">veya tıklayıp seçin</div>
+				</div>
+				<InputFile class="drop-input" OnChange="OnFilesSelected" multiple accept=".frp,.frx,.xml,.zip,.rar" />
+			</div>
+
+			@if (!string.IsNullOrWhiteSpace(_statusMessage))
+			{
+				<div class="status">@_statusMessage</div>
+			}
+
+			<div class="report-list">
+				@if (_reports.Count == 0)
+				{
+					<div class="hint" style="padding:0.8rem;">Henüz rapor yok. En az bir FRP/FRX yükleyin.</div>
+				}
+				else
+				{
+					@foreach (var report in _reports.OrderByDescending(x => x.ImportedAtUtc))
+					{
+						<button type="button"
+								class="report-item @(report.Id == _selectedReport?.Id ? "active" : string.Empty)"
+								@ondblclick="() => SelectReport(report)">
+							<div>
+								<div class="ri-title">@report.Metadata.ReportName</div>
+								<div class="ri-sub">@report.FileName</div>
+							</div>
+							<div class="ri-count">SQL @report.SqlSections.Count</div>
+						</button>
+					}
+				}
+			</div>
+
+			<div class="cloud-list">
+				<div class="pane-header" style="padding:0 0 0.5rem 0; border-bottom:0; background:transparent;">
+					<h2>Bulut Kayıtları</h2>
+					<button class="btn btn-muted" style="padding:0.35rem 0.55rem;" @onclick="RefreshCloudAsync" disabled="@_busy">Yenile</button>
+				</div>
+
+				@if (_cloudRows.Count == 0)
+				{
+					<div class="hint">Supabase tablosunda kayıt bulunamadı veya şema henüz oluşturulmadı.</div>
+				}
+				else
+				{
+					@foreach (var row in _cloudRows)
+					{
+						<div class="cloud-row">
+							<div>
+								<div class="ri-title">@row.ReportName</div>
+								<div class="ri-sub">@row.ReportCode • @row.CreatedAt.LocalDateTime.ToString("g")</div>
+							</div>
+							<a href="@row.FileUrl" target="_blank" rel="noopener noreferrer">İndir</a>
+						</div>
+					}
+				}
+			</div>
+		</div>
+	</section>
+
+	<section class="pane">
+		<header class="pane-header">
+			<h2>Rapor Detayı</h2>
+			@if (_selectedReport is not null)
+			{
+				<span class="hint">Açılış için solda rapora çift tıklayın</span>
+			}
+		</header>
+
+		<div class="pane-content">
+			@if (_selectedReport is null)
+			{
+				<div class="hint">Henüz bir rapor seçilmedi.</div>
+			}
+			else
+			{
+				<div class="meta-grid">
+					<div class="meta-card">
+						<div class="meta-label">Rapor Adı</div>
+						<div class="meta-value">@_selectedReport.Metadata.ReportName</div>
+					</div>
+					<div class="meta-card">
+						<div class="meta-label">Rapor Kodu</div>
+						<div class="meta-value">@(_selectedReport.Metadata.ReportCode == string.Empty ? "-" : _selectedReport.Metadata.ReportCode)</div>
+					</div>
+					<div class="meta-card">
+						<div class="meta-label">Oluşturma</div>
+						<div class="meta-value">@FormatDate(_selectedReport.Metadata.CreatedAt)</div>
+					</div>
+					<div class="meta-card">
+						<div class="meta-label">Son Değişim</div>
+						<div class="meta-value">@FormatDate(_selectedReport.Metadata.ModifiedAt)</div>
+					</div>
+				</div>
+
+				<textarea class="description"
+						  @bind="_selectedReport.Metadata.Description"
+						  placeholder="Açıklama notu (isteğe bağlı)"></textarea>
+
+				<div class="actions">
+					<button class="btn btn-secondary" @onclick="DownloadCurrentAsync" disabled="@_busy">FRX Olarak Kaydet</button>
+					<button class="btn btn-primary" @onclick="UploadCurrentAsync" disabled="@(!_canUpload || _busy)">Supabase'a Yükle</button>
+					<button class="btn btn-muted" @onclick="RefreshCloudAsync" disabled="@_busy">Bulut Listele</button>
+				</div>
+
+				<div class="section-stack">
+					<div class="meta-label" style="margin-top:0.4rem;">SQL Sorguları</div>
+					@for (var i = 0; i < _selectedReport.SqlSections.Count; i++)
+					{
+						var index = i;
+						var key = $"sql-{index}";
+						<div class="section-box">
+							<button class="section-header" @onclick="() => Toggle(key)">
+								<span>@(IsOpen(key) ? "▼" : "▶")</span>
+								<span>@_selectedReport.SqlSections[index].Title</span>
+							</button>
+
+							@if (IsOpen(key))
+							{
+								<textarea class="code-editor" @bind="_selectedReport.SqlSections[index].Content"></textarea>
+							}
+						</div>
+					}
+
+					<div class="meta-label" style="margin-top:0.55rem;">Pascal Kodları</div>
+					@for (var i = 0; i < _selectedReport.ScriptSections.Count; i++)
+					{
+						var index = i;
+						var key = $"psc-{index}";
+						<div class="section-box">
+							<button class="section-header" @onclick="() => Toggle(key)">
+								<span>@(IsOpen(key) ? "▼" : "▶")</span>
+								<span>@_selectedReport.ScriptSections[index].Title</span>
+							</button>
+
+							@if (IsOpen(key))
+							{
+								<textarea class="code-editor" @bind="_selectedReport.ScriptSections[index].Content"></textarea>
+							}
+						</div>
+					}
+				</div>
+			}
+		</div>
+	</section>
+</div>
+
+@code {
+	private readonly List<FrpReportDocument> _reports = new();
+	private readonly HashSet<string> _openSections = new(StringComparer.OrdinalIgnoreCase);
+	private readonly List<SupabaseReportRow> _cloudRows = new();
+
+	private FrpReportDocument? _selectedReport;
+	private string _statusMessage = string.Empty;
+	private bool _busy;
+	private bool _isDragging;
+
+	private bool _canUpload => _selectedReport is not null && SupabaseReportService.IsConfigured;
+
+	protected override async Task OnInitializedAsync()
+	{
+		await RefreshCloudAsync();
+	}
+
+	private async Task OnFilesSelected(InputFileChangeEventArgs eventArgs)
+	{
+		_busy = true;
+		_statusMessage = string.Empty;
+
+		var successCount = 0;
+		var failed = new List<string>();
+
+		try
+		{
+			foreach (var file in eventArgs.GetMultipleFiles(100))
+			{
+				try
+				{
+					await using var fileStream = file.OpenReadStream(maxAllowedSize: 30 * 1024 * 1024);
+					using var fileBuffer = new MemoryStream();
+					await fileStream.CopyToAsync(fileBuffer);
+
+					var expandedFiles = await ArchiveService.ExpandAsync(file.Name, fileBuffer.ToArray());
+
+					foreach (var expanded in expandedFiles)
+					{
+						await using var reportStream = new MemoryStream(expanded.Content);
+						var parsed = await ParserService.ParseAsync(expanded.FileName, reportStream);
+						_reports.Add(parsed);
+						_selectedReport ??= parsed;
+						successCount++;
+					}
+				}
+				catch (Exception exception)
+				{
+					failed.Add($"{file.Name}: {exception.Message}");
+				}
+			}
+		}
+		finally
+		{
+			_busy = false;
+		}
+
+		if (failed.Count == 0)
+		{
+			_statusMessage = $"{successCount} dosya başarıyla ayrıştırıldı.";
+		}
+		else
+		{
+			_statusMessage = $"Başarılı: {successCount}, Hata: {failed.Count}. {string.Join(" | ", failed)}";
+		}
+	}
+
+	private void OnDragOver(DragEventArgs _)
+	{
+		_isDragging = true;
+	}
+
+	private void OnDragLeave(DragEventArgs _)
+	{
+		_isDragging = false;
+	}
+
+	private void SelectReport(FrpReportDocument report)
+	{
+		_selectedReport = report;
+		_openSections.Clear();
+	}
+
+	private bool IsOpen(string key) => _openSections.Contains(key);
+
+	private void Toggle(string key)
+	{
+		if (!_openSections.Add(key))
+		{
+			_openSections.Remove(key);
+		}
+	}
+
+	private static string FormatDate(DateTimeOffset? dateValue) =>
+		dateValue is null ? "-" : dateValue.Value.LocalDateTime.ToString("g");
+
+	private async Task DownloadCurrentAsync()
+	{
+		if (_selectedReport is null)
+		{
+			return;
+		}
+
+		_busy = true;
+		try
+		{
+			await ExportService.DownloadReportXmlAsync(_selectedReport);
+			_statusMessage = "Güncel içerik FRX olarak indirildi.";
+		}
+		catch (Exception exception)
+		{
+			_statusMessage = $"İndirme hatası: {exception.Message}";
+		}
+		finally
+		{
+			_busy = false;
+		}
+	}
+
+	private async Task UploadCurrentAsync()
+	{
+		if (_selectedReport is null)
+		{
+			return;
+		}
+
+		_busy = true;
+		try
+		{
+			var result = await SupabaseReportService.UploadReportAsync(_selectedReport, _selectedReport.Metadata.Description);
+			_statusMessage = result.Message;
+
+			if (result.IsSuccess)
+			{
+				await RefreshCloudAsync();
+			}
+		}
+		finally
+		{
+			_busy = false;
+		}
+	}
+
+	private async Task RefreshCloudAsync()
+	{
+		_busy = true;
+		try
+		{
+			var rows = await SupabaseReportService.GetRecentReportsAsync();
+			_cloudRows.Clear();
+			_cloudRows.AddRange(rows);
+		}
+		finally
+		{
+			_busy = false;
+		}
+	}
+}
