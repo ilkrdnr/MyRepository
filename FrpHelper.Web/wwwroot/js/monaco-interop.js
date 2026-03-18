@@ -48,8 +48,8 @@ window.frpMonaco = (function () {
             roundedSelection: false,
             scrollBeyondLastLine: false,
             fontFamily: "JetBrains Mono, Consolas, monospace",
-            fontSize: 13,
-            lineHeight: 20,
+            fontSize: 12,
+            lineHeight: 18,
             readOnly: !!readOnly,
             theme: "vs"
         });

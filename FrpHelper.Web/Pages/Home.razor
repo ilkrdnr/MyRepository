@@ -1,6 +1,8 @@
 @page "/"
 @implements IDisposable
+@inject NavigationManager Navigation
 @inject IAuthService AuthService
+@inject IUserPermissionService PermissionService
 @inject IArchiveService ArchiveService
 @inject IReportParserService ParserService
 @inject IReportExportService ExportService
@@ -8,281 +10,511 @@
 
 <PageTitle>FRP Helper</PageTitle>
 
-<div class="hero">
-    <h2>FRP Pool</h2>
-    <p>Giris yapan herkes rapor havuzunu gorur, indirir ve yeni FRP ekleyebilir.</p>
-</div>
+@if (!IsAuthenticated)
+{
+    <div class="auth-gate">
+        <div class="auth-backdrop" aria-hidden="true"></div>
 
-<div class="workspace">
-    <section class="left-col">
-        <article class="panel auth-panel">
-            <header class="panel-head">
-                <h3>Hesap</h3>
-            </header>
+        <section class="auth-card modern">
+            <div class="auth-badge">FRP HELPER</div>
+            <h1>Hesabınıza giriş yapın</h1>
+            <p class="auth-lead">Rapor ekranına geçmek için kimlik doğrulaması yapın.</p>
 
-            @if (!IsAuthenticated)
+            @if (!SupabaseReportService.IsConfigured)
             {
-                <div class="auth-toggle">
-                    <button class="chip @(_isLoginMode ? "active" : string.Empty)" @onclick="() => _isLoginMode = true">Giris</button>
-                    <button class="chip @(!_isLoginMode ? "active" : string.Empty)" @onclick="() => _isLoginMode = false">Kayit</button>
-                </div>
-
-                <label class="field-label">E-posta</label>
-                <input class="field" type="email" @bind="_email" placeholder="ad@ornek.com" />
-
-                <label class="field-label">Sifre</label>
-                <input class="field" type="password" @bind="_password" placeholder="En az 6 karakter" />
-
-                <button class="btn btn-main" @onclick="SubmitAuthAsync" disabled="@_busyAuth">
-                    @(_isLoginMode ? "Giris Yap" : "Kayit Ol")
-                </button>
+                <div class="status warning">Supabase ayarları eksik görünüyor. Lütfen appsettings.json ayarlarını kontrol edin.</div>
             }
-            else
+
+            <div class="auth-toggle">
+                <button class="chip @(IsMode(AuthMode.Login) ? "active" : string.Empty)" @onclick="() => SetAuthMode(AuthMode.Login)">Giriş</button>
+                <button class="chip @(IsMode(AuthMode.Register) ? "active" : string.Empty)" @onclick="() => SetAuthMode(AuthMode.Register)">Kayıt</button>
+                <button class="chip @(IsMode(AuthMode.ForgotPassword) ? "active" : string.Empty)" @onclick="() => SetAuthMode(AuthMode.ForgotPassword)">Şifremi Unuttum</button>
+            </div>
+
+            <label class="field-label">E-posta</label>
+            <input class="field"
+                   type="email"
+                   @bind="_email"
+                   placeholder="ornek@firma.com"
+                   disabled="@_busyAuth" />
+
+            @if (!IsMode(AuthMode.ForgotPassword))
             {
-                <div class="session-box">
-                    <div class="session-label">Aktif Kullanici</div>
-                    <div class="session-value">@_session?.Email</div>
-                    <button class="btn btn-soft" @onclick="LogoutAsync" disabled="@_busyAuth">Cikis Yap</button>
+                <label class="field-label">Şifre</label>
+                <div class="password-row">
+                    <input class="field"
+                           type="@(_showPassword ? "text" : "password")"
+                           @bind="_password"
+                           placeholder="En az 6 karakter"
+                           disabled="@_busyAuth" />
+                    <button type="button" class="btn btn-soft icon-btn" @onclick="TogglePasswordVisibility" disabled="@_busyAuth">
+                        @(_showPassword ? "Gizle" : "Göster")
+                    </button>
                 </div>
+            }
+
+            @if (IsMode(AuthMode.Login))
+            {
+                <label class="remember-row">
+                    <input type="checkbox" @bind="_rememberMe" disabled="@_busyAuth" />
+                    <span>Beni hatırla</span>
+                </label>
+                <p class="auth-hint">Girişten sonra rapor yönetim ekranı açılır.</p>
+            }
+
+            <button class="btn btn-main full" @onclick="SubmitAuthAsync" disabled="@_busyAuth">
+                @GetAuthButtonText()
+            </button>
+
+            @if (IsMode(AuthMode.Login))
+            {
+                <button type="button" class="text-btn" @onclick="() => SetAuthMode(AuthMode.ForgotPassword)" disabled="@_busyAuth">
+                    Şifremi unuttum
+                </button>
             }
 
             @if (!string.IsNullOrWhiteSpace(_authMessage))
             {
-                <div class="status">@_authMessage</div>
+                <div class="status @_authMessageLevel">@_authMessage</div>
             }
-        </article>
+        </section>
+    </div>
+}
+else
+{
+    <div class="hero">
+        <div>
+            <h2>Rapor Çalışma Alanı</h2>
+            <p>Yerel dosya düzenleme, FRP indirme ve yetkiye bağlı ortak havuz erişimi.</p>
+        </div>
 
-        <article class="panel">
-            <header class="panel-head">
-                <h3>Dosya Yukleme</h3>
-                <span class="mini">Toplu FRP/ZIP/RAR</span>
-            </header>
+        <div class="hero-actions">
+            <button class="btn btn-soft" @onclick="TogglePoolPanelAsync" disabled="@_busy">
+                @(_showPoolPanel ? "Ortak Havuzu Gizle" : "Ortak Havuzu Aç")
+            </button>
 
-            <div class="drop-zone @(_isDragging ? "dragging" : string.Empty) @(!IsAuthenticated ? "disabled" : string.Empty)"
-                 @ondragover="OnDragOver"
-                 @ondragleave="OnDragLeave"
-                 @ondrop="OnDragLeave"
-                 @ondrop:preventDefault>
-                <div class="drop-text">
-                    <div><strong>FRP/FRX/XML/ZIP/RAR</strong> buraya birakin</div>
-                    <div class="mini">veya dosya secin</div>
-                </div>
-                <InputFile class="drop-input"
-                           OnChange="OnFilesSelected"
-                           multiple
-                           accept=".frp,.frx,.xml,.zip,.rar"
-                           disabled="@(!IsAuthenticated || _busy)" />
-            </div>
-
-            @if (!string.IsNullOrWhiteSpace(_statusMessage))
+            @if (IsAdminUser)
             {
-                <div class="status">@_statusMessage</div>
+                <button class="btn btn-main" @onclick="GoToAdminPage">Admin Paneli</button>
             }
-        </article>
+        </div>
+    </div>
 
-        <article class="panel">
-            <header class="panel-head">
-                <h3>Yerel Raporlar</h3>
-                <span class="mini">@_reports.Count adet</span>
-            </header>
+    @if (!string.IsNullOrWhiteSpace(_statusMessage))
+    {
+        <div class="status @_statusLevel">@_statusMessage</div>
+    }
 
-            <div class="report-list">
-                @if (_reports.Count == 0)
+    @if (!SupabaseReportService.IsConfigured)
+    {
+        <div class="status warning">Supabase bağlantısı yapılandırılmamış görünüyor. Havuz işlemleri çalışmayabilir.</div>
+    }
+
+    <div class="workspace">
+        <section class="left-col">
+            <article class="panel session-panel">
+                <header class="panel-head">
+                    <h3>Oturum Bilgisi</h3>
+                    <span class="mini">@PermissionBadgeText</span>
+                </header>
+
+                <div class="session-box">
+                    <div class="session-label">Aktif kullanıcı</div>
+                    <div class="session-value">@_session?.Email</div>
+                    <div class="permission-list">
+                        <span class="perm-pill @(CanViewPool ? "on" : "off")">Havuz görüntüleme</span>
+                        <span class="perm-pill @(CanUploadPool ? "on" : "off")">Havuza yükleme</span>
+                        <span class="perm-pill @(CanEditReports ? "on" : "off")">Rapor düzenleme</span>
+                    </div>
+                    <button class="btn btn-soft" @onclick="LogoutAsync" disabled="@_busyAuth">Çıkış Yap</button>
+                </div>
+            </article>
+
+            <article class="panel">
+                <header class="panel-head">
+                    <h3>Dosya Yükleme</h3>
+                    <span class="mini">Toplu FRP/ZIP/RAR</span>
+                </header>
+
+                <div class="drop-zone @(_isDragging ? "dragging" : string.Empty) @(_busy ? "disabled" : string.Empty)"
+                     @ondragover="OnDragOver"
+                     @ondragleave="OnDragLeave"
+                     @ondrop="OnDragLeave"
+                     @ondrop:preventDefault>
+                    <div class="drop-text">
+                        <div><strong>FRP/FRX/XML/ZIP/RAR</strong> dosyalarını buraya bırakın</div>
+                        <div class="mini">veya dosya seçin</div>
+                    </div>
+                    <InputFile class="drop-input"
+                               OnChange="OnFilesSelected"
+                               multiple
+                               accept=".frp,.frx,.xml,.zip,.rar"
+                               disabled="@_busy" />
+                </div>
+            </article>
+
+            <article class="panel">
+                <header class="panel-head">
+                    <h3>Yerel Raporlar</h3>
+                    <span class="mini">@_reports.Count adet</span>
+                </header>
+
+                <input class="field compact"
+                       @bind="_reportSearchTerm"
+                       placeholder="Rapor adına göre filtrele"
+                       disabled="@_busy" />
+
+                <div class="report-list">
+                    @if (FilteredReports.Count == 0)
+                    {
+                        <div class="empty">Eşleşen rapor bulunamadı. Dosya yükleyip tekrar deneyin.</div>
+                    }
+                    else
+                    {
+                        @foreach (var report in FilteredReports)
+                        {
+                            <button type="button"
+                                    class="report-item @(report.Id == _selectedReport?.Id ? "active" : string.Empty)"
+                                    @onclick="() => SelectReport(report)">
+                                <div class="ri-title">@report.Metadata.ReportName</div>
+                                <div class="ri-sub">@report.FileName</div>
+                                <div class="ri-sub">GUID: @report.Id</div>
+                                <div class="ri-count">SQL @report.SqlSections.Count | Pascal @report.ScriptSections.Count</div>
+                            </button>
+                        }
+                    }
+                </div>
+            </article>
+        </section>
+
+        <section class="right-col">
+            <article class="panel detail-panel">
+                <header class="panel-head">
+                    <h3>Rapor Detayı</h3>
+                    <span class="mini">@(_selectedReport is null ? "Seçim yok" : _selectedReport.FileName)</span>
+                </header>
+
+                @if (_selectedReport is null)
                 {
-                    <div class="empty">Dosya eklendikten sonra burada listelenir.</div>
+                    <div class="empty">Düzenlemek için soldaki listeden bir rapor seçin.</div>
                 }
                 else
                 {
-                    @foreach (var report in _reports.OrderByDescending(item => item.ImportedAtUtc))
-                    {
-                        <button type="button"
-                                class="report-item @(report.Id == _selectedReport?.Id ? "active" : string.Empty)"
-                                @onclick="() => SelectReport(report)">
-                            <div class="ri-title">@report.Metadata.ReportName</div>
-                            <div class="ri-sub">@report.FileName</div>
-                            <div class="ri-count">SQL @report.SqlSections.Count | Pascal @report.ScriptSections.Count</div>
-                        </button>
-                    }
-                }
-            </div>
-        </article>
-    </section>
+                    <div class="meta-grid">
+                        <div class="meta-card">
+                            <div class="meta-label">Rapor Adı</div>
+                            <div class="meta-value">@_selectedReport.Metadata.ReportName</div>
+                        </div>
+                        <div class="meta-card">
+                            <div class="meta-label">Rapor Kodu</div>
+                            <div class="meta-value">@_selectedReport.Metadata.ReportCode</div>
+                        </div>
+                        <div class="meta-card">
+                            <div class="meta-label">Rapor GUID</div>
+                            <div class="meta-value">@_selectedReport.Id</div>
+                        </div>
+                        <div class="meta-card">
+                            <div class="meta-label">Son Değişim</div>
+                            <div class="meta-value">@FormatDate(_selectedReport.Metadata.ModifiedAt)</div>
+                        </div>
+                    </div>
 
-    <section class="right-col">
-        <article class="panel detail-panel">
+                    <textarea class="description"
+                              @bind="_selectedReport.Metadata.Description"
+                              placeholder="Rapor için kısa bir açıklama ekleyin"
+                              rows="3"
+                              readonly="@(!CanEditReports)"></textarea>
+
+                    <div class="actions">
+                        <button class="btn btn-soft" @onclick="DownloadCurrentAsync" disabled="@(_busy || !CanEditReports)">FRP Olarak Kaydet</button>
+                        <button class="btn btn-main" @onclick="UploadCurrentAsync" disabled="@(!_canUpload || _busy || !CanUploadPool)">Havuza Yükle</button>
+                    </div>
+
+                    @if (!CanEditReports)
+                    {
+                        <div class="status warning">Rapor düzenleme yetkiniz yok. Editör salt okunur modda açıldı.</div>
+                    }
+
+                    <section class="editor-block">
+                        <div class="block-title">SQL Sorguları</div>
+                        @if (_selectedReport.SqlSections.Count == 0)
+                        {
+                            <div class="empty">Bu raporda SQL bölümü bulunamadı.</div>
+                        }
+                        else
+                        {
+                            @for (var i = 0; i < _selectedReport.SqlSections.Count; i++)
+                            {
+                                var sectionKey = $"sql-{i}";
+                                <div class="section-box">
+                                    <button class="section-header" @onclick="() => Toggle(sectionKey)">
+                                        <span>@(IsOpen(sectionKey) ? "-" : "+")</span>
+                                        <span>@_selectedReport.SqlSections[i].Title</span>
+                                    </button>
+
+                                    @if (IsOpen(sectionKey))
+                                    {
+                                        <MonacoEditor Value="@_selectedReport.SqlSections[i].Content"
+                                                      ValueChanged="@(value => OnSqlChanged(i, value))"
+                                                      Language="sql"
+                                                      Height="240px"
+                                                      ReadOnly="@(!CanEditReports)" />
+                                    }
+                                </div>
+                            }
+                        }
+                    </section>
+
+                    <section class="editor-block">
+                        <div class="block-title">Pascal Kodları</div>
+                        @if (_selectedReport.ScriptSections.Count == 0)
+                        {
+                            <div class="empty">Bu raporda Pascal script bulunamadı.</div>
+                        }
+                        else
+                        {
+                            @for (var i = 0; i < _selectedReport.ScriptSections.Count; i++)
+                            {
+                                var sectionKey = $"psc-{i}";
+                                <div class="section-box">
+                                    <button class="section-header" @onclick="() => Toggle(sectionKey)">
+                                        <span>@(IsOpen(sectionKey) ? "-" : "+")</span>
+                                        <span>@_selectedReport.ScriptSections[i].Title</span>
+                                    </button>
+
+                                    @if (IsOpen(sectionKey))
+                                    {
+                                        <MonacoEditor Value="@_selectedReport.ScriptSections[i].Content"
+                                                      ValueChanged="@(value => OnPascalChanged(i, value))"
+                                                      Language="pascal"
+                                                      Height="240px"
+                                                      ReadOnly="@(!CanEditReports)" />
+                                    }
+                                </div>
+                            }
+                        }
+                    </section>
+                }
+            </article>
+        </section>
+    </div>
+
+    @if (_showPoolPanel)
+    {
+        <article class="panel pool-panel">
             <header class="panel-head">
-                <h3>Rapor Detayi</h3>
-                <span class="mini">@(_selectedReport is null ? "Secim yok" : _selectedReport.FileName)</span>
+                <h3>Ortak Havuz</h3>
+                <button class="btn btn-soft" @onclick="RefreshCloudAsync" disabled="@_busy">Yenile</button>
             </header>
 
-            @if (_selectedReport is null)
+            @if (!CanViewPool)
             {
-                <div class="empty">Soldaki listeden bir rapor secin.</div>
+                <div class="status warning">Havuz görüntüleme yetkiniz bulunmuyor.</div>
             }
             else
             {
-                <div class="meta-grid">
-                    <div class="meta-card">
-                        <div class="meta-label">Rapor Adi</div>
-                        <div class="meta-value">@_selectedReport.Metadata.ReportName</div>
+                <input class="field compact"
+                       @bind="_poolSearchTerm"
+                       placeholder="GUID, rapor adı, kod veya yükleyen ile ara"
+                       disabled="@_busy" />
+
+                @if (_cloudRows.Count == 0)
+                {
+                    <div class="empty">Havuzda henüz rapor bulunmuyor.</div>
+                }
+                else if (FilteredCloudRows.Count == 0)
+                {
+                    <div class="empty">Arama kriterinize uygun rapor bulunamadı.</div>
+                }
+                else
+                {
+                    <div class="pool-table-wrap">
+                        <table class="pool-table">
+                            <thead>
+                                <tr>
+                                    <th>GUID</th>
+                                    <th>Rapor Adı</th>
+                                    <th>Kod</th>
+                                    <th>Yükleyen</th>
+                                    <th>Yüklenme</th>
+                                    <th>İşlemler</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var row in FilteredCloudRows)
+                                {
+                                    <tr>
+                                        <td class="guid-cell">@row.Id</td>
+                                        <td>
+                                            @if (IsAdminUser)
+                                            {
+                                                <input class="table-input" @bind="row.ReportName" />
+                                            }
+                                            else
+                                            {
+                                                <span>@row.ReportName</span>
+                                            }
+                                        </td>
+                                        <td>
+                                            @if (IsAdminUser)
+                                            {
+                                                <input class="table-input" @bind="row.ReportCode" />
+                                            }
+                                            else
+                                            {
+                                                <span>@row.ReportCode</span>
+                                            }
+                                        </td>
+                                        <td>@(string.IsNullOrWhiteSpace(row.OwnerEmail) ? "-" : row.OwnerEmail)</td>
+                                        <td>@row.CreatedAt.LocalDateTime.ToString("g")</td>
+                                        <td class="table-actions">
+                                            <a class="download-link" href="@row.FileUrl" target="_blank" rel="noopener noreferrer">FRP İndir</a>
+                                            @if (IsAdminUser)
+                                            {
+                                                <button class="btn btn-soft compact-btn" @onclick="() => SavePoolRowAsync(row)" disabled="@_busy">Güncelle</button>
+                                                <button class="btn btn-danger compact-btn" @onclick="() => DeletePoolRowAsync(row)" disabled="@_busy">Sil</button>
+                                            }
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
                     </div>
-                    <div class="meta-card">
-                        <div class="meta-label">Rapor Kodu</div>
-                        <div class="meta-value">@_selectedReport.Metadata.ReportCode</div>
-                    </div>
-                    <div class="meta-card">
-                        <div class="meta-label">Olusturma</div>
-                        <div class="meta-value">@FormatDate(_selectedReport.Metadata.CreatedAt)</div>
-                    </div>
-                    <div class="meta-card">
-                        <div class="meta-label">Son Degisim</div>
-                        <div class="meta-value">@FormatDate(_selectedReport.Metadata.ModifiedAt)</div>
-                    </div>
-                </div>
-
-                <textarea class="description"
-                          @bind="_selectedReport.Metadata.Description"
-                          placeholder="Aciklama notu"
-                          rows="3"></textarea>
-
-                <div class="actions">
-                    <button class="btn btn-soft" @onclick="DownloadCurrentAsync" disabled="@_busy">FRX Olarak Kaydet</button>
-                    <button class="btn btn-main" @onclick="UploadCurrentAsync" disabled="@(!_canUpload || _busy)">Havuza Yukle</button>
-                </div>
-
-                <section class="editor-block">
-                    <div class="block-title">SQL Sorgulari</div>
-                    @for (var i = 0; i < _selectedReport.SqlSections.Count; i++)
-                    {
-                        var sectionKey = $"sql-{i}";
-                        <div class="section-box">
-                            <button class="section-header" @onclick="() => Toggle(sectionKey)">
-                                <span>@(IsOpen(sectionKey) ? "-" : "+")</span>
-                                <span>@_selectedReport.SqlSections[i].Title</span>
-                            </button>
-
-                            @if (IsOpen(sectionKey))
-                            {
-                                <MonacoEditor Value="@_selectedReport.SqlSections[i].Content"
-                                              ValueChanged="@(value => OnSqlChanged(i, value))"
-                                              Language="sql"
-                                              Height="220px"
-                                              ReadOnly="false" />
-                            }
-                        </div>
-                    }
-                </section>
-
-                <section class="editor-block">
-                    <div class="block-title">Pascal Kodlari</div>
-                    @for (var i = 0; i < _selectedReport.ScriptSections.Count; i++)
-                    {
-                        var sectionKey = $"psc-{i}";
-                        <div class="section-box">
-                            <button class="section-header" @onclick="() => Toggle(sectionKey)">
-                                <span>@(IsOpen(sectionKey) ? "-" : "+")</span>
-                                <span>@_selectedReport.ScriptSections[i].Title</span>
-                            </button>
-
-                            @if (IsOpen(sectionKey))
-                            {
-                                <MonacoEditor Value="@_selectedReport.ScriptSections[i].Content"
-                                              ValueChanged="@(value => OnPascalChanged(i, value))"
-                                              Language="pascal"
-                                              Height="220px"
-                                              ReadOnly="false" />
-                            }
-                        </div>
-                    }
-                </section>
+                }
             }
         </article>
-    </section>
-</div>
-
-<article class="panel pool-panel">
-    <header class="panel-head">
-        <h3>Havuz</h3>
-        <button class="btn btn-soft" @onclick="RefreshCloudAsync" disabled="@(_busy || !IsAuthenticated)">Yenile</button>
-    </header>
-
-    @if (!IsAuthenticated)
-    {
-        <div class="empty">Havuz raporlarini gormek ve indirmek icin giris yapin.</div>
     }
-    else if (_cloudRows.Count == 0)
-    {
-        <div class="empty">Havuzda kayit bulunamadi.</div>
-    }
-    else
-    {
-        <div class="pool-grid">
-            @foreach (var row in _cloudRows)
-            {
-                <div class="pool-card">
-                    <div class="ri-title">@row.ReportName</div>
-                    <div class="ri-sub">Kod: @row.ReportCode</div>
-                    <div class="ri-sub">@row.CreatedAt.LocalDateTime.ToString("g")</div>
-                    <a class="download-link" href="@row.FileUrl" target="_blank" rel="noopener noreferrer">FRP indir</a>
-                </div>
-            }
-        </div>
-    }
-</article>
+}
 
 @code {
+    private enum AuthMode
+    {
+        Login,
+        Register,
+        ForgotPassword
+    }
+
     private readonly List<FrpReportDocument> _reports = new();
     private readonly List<SupabaseReportRow> _cloudRows = new();
     private readonly HashSet<string> _openSections = new(StringComparer.OrdinalIgnoreCase);
 
     private FrpReportDocument? _selectedReport;
     private AuthSession? _session;
+    private UserPermissionRow? _permission;
 
     private string _statusMessage = string.Empty;
+    private string _statusLevel = "info";
     private string _authMessage = string.Empty;
+    private string _authMessageLevel = "info";
     private string _email = string.Empty;
     private string _password = string.Empty;
+    private string _reportSearchTerm = string.Empty;
+    private string _poolSearchTerm = string.Empty;
 
-    private bool _isLoginMode = true;
+    private AuthMode _authMode = AuthMode.Login;
+    private bool _rememberMe = true;
+    private bool _showPassword;
+    private bool _showPoolPanel;
     private bool _isDragging;
     private bool _busy;
     private bool _busyAuth;
 
     private bool IsAuthenticated => _session?.IsAuthenticated == true;
+    private bool IsAdminUser => _permission?.IsAdmin == true;
+    private bool CanViewPool => _permission?.CanViewPool ?? true;
+    private bool CanUploadPool => _permission?.CanUploadPool ?? true;
+    private bool CanEditReports => _permission?.CanEditReports ?? true;
     private bool _canUpload => _selectedReport is not null && IsAuthenticated && SupabaseReportService.IsConfigured;
+
+    private string PermissionBadgeText => IsAdminUser ? "Yönetici" : "Standart kullanıcı";
+
+    private IReadOnlyList<FrpReportDocument> FilteredReports =>
+        _reports
+            .Where(report => string.IsNullOrWhiteSpace(_reportSearchTerm)
+                || report.Metadata.ReportName.Contains(_reportSearchTerm, StringComparison.OrdinalIgnoreCase)
+                || report.FileName.Contains(_reportSearchTerm, StringComparison.OrdinalIgnoreCase)
+                || report.Id.ToString().Contains(_reportSearchTerm, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(report => report.ImportedAtUtc)
+            .ToList();
+
+    private IReadOnlyList<SupabaseReportRow> FilteredCloudRows =>
+        _cloudRows
+            .Where(row => string.IsNullOrWhiteSpace(_poolSearchTerm)
+                || row.ReportName.Contains(_poolSearchTerm, StringComparison.OrdinalIgnoreCase)
+                || row.ReportCode.Contains(_poolSearchTerm, StringComparison.OrdinalIgnoreCase)
+                || row.Id.ToString().Contains(_poolSearchTerm, StringComparison.OrdinalIgnoreCase)
+                || row.OwnerEmail.Contains(_poolSearchTerm, StringComparison.OrdinalIgnoreCase))
+            .ToList();
 
     protected override async Task OnInitializedAsync()
     {
         AuthService.SessionChanged += HandleSessionChanged;
-        _session = await AuthService.RestoreSessionAsync();
+        PermissionService.PermissionChanged += HandlePermissionChanged;
 
+        _session = await AuthService.RestoreSessionAsync();
         if (IsAuthenticated)
         {
-            await RefreshCloudAsync();
+            await LoadPermissionsAsync();
         }
     }
 
     private async Task SubmitAuthAsync()
     {
+        ClearAuthMessage();
+        var email = _email.Trim();
+
+        if (string.IsNullOrWhiteSpace(email))
+        {
+            SetAuthMessage("Lütfen e-posta adresinizi girin.", "warning");
+            return;
+        }
+
+        if (!IsValidEmail(email))
+        {
+            SetAuthMessage("Geçerli bir e-posta adresi girin.", "warning");
+            return;
+        }
+
+        if (!IsMode(AuthMode.ForgotPassword) && _password.Length < 6)
+        {
+            SetAuthMessage("Şifre en az 6 karakter olmalıdır.", "warning");
+            return;
+        }
+
         _busyAuth = true;
         try
         {
             AuthOperationResult result;
-            if (_isLoginMode)
+            if (IsMode(AuthMode.Login))
             {
-                result = await AuthService.LoginAsync(_email.Trim(), _password);
+                result = await AuthService.LoginAsync(email, _password, _rememberMe);
+            }
+            else if (IsMode(AuthMode.Register))
+            {
+                result = await AuthService.RegisterAsync(email, _password, true);
             }
             else
             {
-                result = await AuthService.RegisterAsync(_email.Trim(), _password);
+                result = await AuthService.SendPasswordResetAsync(email);
             }
 
-            _authMessage = result.Message;
-            if (result.IsSuccess)
+            SetAuthMessage(result.Message, result.IsSuccess ? "success" : "error");
+
+            if (!result.IsSuccess)
+            {
+                return;
+            }
+
+            if (result.Session is not null && result.Session.IsAuthenticated)
             {
                 _session = result.Session;
                 _password = string.Empty;
-                await RefreshCloudAsync();
+                await LoadPermissionsAsync();
+            }
+
+            if (IsMode(AuthMode.ForgotPassword))
+            {
+                _authMode = AuthMode.Login;
             }
         }
         finally
@@ -297,9 +529,17 @@
         try
         {
             await AuthService.LogoutAsync();
+
             _session = null;
+            _permission = null;
             _cloudRows.Clear();
-            _authMessage = "Oturum kapatildi.";
+            _selectedReport = null;
+            _openSections.Clear();
+            _showPoolPanel = false;
+
+            _authMode = AuthMode.Login;
+            _password = string.Empty;
+            SetAuthMessage("Çıkış işlemi tamamlandı.", "success");
         }
         finally
         {
@@ -307,16 +547,59 @@
         }
     }
 
+    private async Task LoadPermissionsAsync()
+    {
+        if (!IsAuthenticated)
+        {
+            _permission = null;
+            _showPoolPanel = false;
+            return;
+        }
+
+        _ = await PermissionService.EnsureCurrentUserRecordAsync();
+        _permission = await PermissionService.RefreshMyPermissionsAsync();
+
+        if (CanViewPool)
+        {
+            await RefreshCloudAsync();
+        }
+        else
+        {
+            _cloudRows.Clear();
+            _showPoolPanel = false;
+        }
+    }
+
+    private async Task TogglePoolPanelAsync()
+    {
+        if (!CanViewPool)
+        {
+            SetStatus("Ortak havuzu görüntüleme yetkiniz bulunmuyor.", "warning");
+            return;
+        }
+
+        _showPoolPanel = !_showPoolPanel;
+        if (_showPoolPanel)
+        {
+            await RefreshCloudAsync();
+        }
+    }
+
+    private void GoToAdminPage()
+    {
+        Navigation.NavigateTo("/admin");
+    }
+
     private async Task OnFilesSelected(InputFileChangeEventArgs eventArgs)
     {
         if (!IsAuthenticated)
         {
-            _statusMessage = "Dosya islemleri icin once giris yapin.";
+            SetStatus("Dosya işlemleri için önce giriş yapmanız gerekiyor.", "warning");
             return;
         }
 
         _busy = true;
-        _statusMessage = string.Empty;
+        SetStatus(string.Empty, "info");
 
         var successCount = 0;
         var failed = new List<string>();
@@ -353,9 +636,13 @@
             _busy = false;
         }
 
-        _statusMessage = failed.Count == 0
-            ? $"{successCount} dosya basariyla ayristrildi."
-            : $"Basarili: {successCount}, Hata: {failed.Count}. {string.Join(" | ", failed)}";
+        if (failed.Count == 0)
+        {
+            SetStatus($"{successCount} dosya başarıyla içeri aktarıldı.", "success");
+            return;
+        }
+
+        SetStatus($"Başarılı: {successCount}, Hata: {failed.Count}. {string.Join(" | ", failed)}", "warning");
     }
 
     private void SelectReport(FrpReportDocument report)
@@ -367,6 +654,13 @@
     {
         if (_selectedReport is null)
         {
+            SetStatus("Yükleme için önce bir rapor seçin.", "warning");
+            return;
+        }
+
+        if (!CanUploadPool)
+        {
+            SetStatus("Havuza yükleme yetkiniz bulunmuyor.", "warning");
             return;
         }
 
@@ -374,9 +668,9 @@
         try
         {
             var result = await SupabaseReportService.UploadReportAsync(_selectedReport, _selectedReport.Metadata.Description);
-            _statusMessage = result.Message;
+            SetStatus(result.Message, result.IsSuccess ? "success" : "error");
 
-            if (result.IsSuccess)
+            if (result.IsSuccess && _showPoolPanel)
             {
                 await RefreshCloudAsync();
             }
@@ -391,6 +685,13 @@
     {
         if (_selectedReport is null)
         {
+            SetStatus("İndirme için önce bir rapor seçin.", "warning");
+            return;
+        }
+
+        if (!CanEditReports)
+        {
+            SetStatus("FRP alma işlemi için düzenleme yetkisine sahip olmanız gerekiyor.", "warning");
             return;
         }
 
@@ -398,11 +699,11 @@
         try
         {
             await ExportService.DownloadReportXmlAsync(_selectedReport);
-            _statusMessage = "Guncel icerik FRX olarak indirildi.";
+            SetStatus("Rapor güncel haliyle FRP olarak indirildi.", "success");
         }
         catch (Exception exception)
         {
-            _statusMessage = $"Indirme hatasi: {exception.Message}";
+            SetStatus($"İndirme hatası: {exception.Message}", "error");
         }
         finally
         {
@@ -412,7 +713,7 @@
 
     private async Task RefreshCloudAsync()
     {
-        if (!IsAuthenticated)
+        if (!IsAuthenticated || !CanViewPool)
         {
             _cloudRows.Clear();
             return;
@@ -424,6 +725,55 @@
             var rows = await SupabaseReportService.GetRecentReportsAsync();
             _cloudRows.Clear();
             _cloudRows.AddRange(rows);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task SavePoolRowAsync(SupabaseReportRow row)
+    {
+        if (!IsAdminUser)
+        {
+            SetStatus("Bu işlem için yönetici yetkisi gerekiyor.", "warning");
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            var result = await SupabaseReportService.UpdateReportMetadataAsync(row);
+            SetStatus(result.Message, result.IsSuccess ? "success" : "error");
+            if (result.IsSuccess)
+            {
+                await RefreshCloudAsync();
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task DeletePoolRowAsync(SupabaseReportRow row)
+    {
+        if (!IsAdminUser)
+        {
+            SetStatus("Bu işlem için yönetici yetkisi gerekiyor.", "warning");
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            var result = await SupabaseReportService.DeleteReportAsync(row);
+            SetStatus(result.Message, result.IsSuccess ? "success" : "error");
+
+            if (result.IsSuccess)
+            {
+                _cloudRows.Remove(row);
+            }
         }
         finally
         {
@@ -453,7 +803,7 @@
 
     private void OnSqlChanged(int index, string value)
     {
-        if (_selectedReport is null || index < 0 || index >= _selectedReport.SqlSections.Count)
+        if (!CanEditReports || _selectedReport is null || index < 0 || index >= _selectedReport.SqlSections.Count)
         {
             return;
         }
@@ -463,7 +813,7 @@
 
     private void OnPascalChanged(int index, string value)
     {
-        if (_selectedReport is null || index < 0 || index >= _selectedReport.ScriptSections.Count)
+        if (!CanEditReports || _selectedReport is null || index < 0 || index >= _selectedReport.ScriptSections.Count)
         {
             return;
         }
@@ -471,19 +821,84 @@
         _selectedReport.ScriptSections[index].Content = value;
     }
 
+    private static bool IsValidEmail(string email)
+    {
+        try
+        {
+            _ = new System.Net.Mail.MailAddress(email);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private static string FormatDate(DateTimeOffset? value) =>
         value is null ? "-" : value.Value.LocalDateTime.ToString("g");
+
+    private bool IsMode(AuthMode mode) => _authMode == mode;
+
+    private string GetAuthButtonText() => _authMode switch
+    {
+        AuthMode.Login => _busyAuth ? "Giriş yapılıyor..." : "Giriş Yap",
+        AuthMode.Register => _busyAuth ? "Kayıt oluşturuluyor..." : "Kayıt Ol",
+        _ => _busyAuth ? "İstek gönderiliyor..." : "Şifre Sıfırlama Bağlantısı Gönder"
+    };
+
+    private void SetAuthMode(AuthMode mode)
+    {
+        _authMode = mode;
+        _password = string.Empty;
+        ClearAuthMessage();
+    }
+
+    private void TogglePasswordVisibility()
+    {
+        _showPassword = !_showPassword;
+    }
+
+    private void SetStatus(string message, string level)
+    {
+        _statusMessage = message;
+        _statusLevel = level;
+    }
+
+    private void SetAuthMessage(string message, string level)
+    {
+        _authMessage = message;
+        _authMessageLevel = level;
+    }
+
+    private void ClearAuthMessage()
+    {
+        _authMessage = string.Empty;
+        _authMessageLevel = "info";
+    }
 
     private async void HandleSessionChanged(AuthSession? session)
     {
         _session = session;
         if (!IsAuthenticated)
         {
+            _permission = null;
             _cloudRows.Clear();
+            _showPoolPanel = false;
         }
         else
         {
-            await RefreshCloudAsync();
+            await LoadPermissionsAsync();
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async void HandlePermissionChanged(UserPermissionRow? permission)
+    {
+        _permission = permission;
+        if (!CanViewPool)
+        {
+            _showPoolPanel = false;
         }
 
         await InvokeAsync(StateHasChanged);
@@ -492,5 +907,6 @@
     public void Dispose()
     {
         AuthService.SessionChanged -= HandleSessionChanged;
+        PermissionService.PermissionChanged -= HandlePermissionChanged;
     }
 }

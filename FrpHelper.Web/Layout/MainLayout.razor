@@ -1,17 +1,54 @@
 ﻿@inherits LayoutComponentBase
-<div class="app-shell">
-    <aside class="sidebar">
-        <NavMenu />
-    </aside>
+@implements IDisposable
+@inject IAuthService AuthService
 
-    <main class="main">
-        <header class="topbar">
-            <h1>FRP Helper</h1>
-            <p>FastReport XML analiz, düzenleme ve Supabase havuz senkronu</p>
-        </header>
+@if (ShowWorkspaceChrome)
+{
+    <div class="app-shell">
+        <aside class="sidebar">
+            <NavMenu />
+        </aside>
 
-        <article class="content">
-            @Body
-        </article>
+        <main class="main">
+            <header class="topbar">
+                <h1>FRP Helper</h1>
+                <p>FastReport XML analiz, düzenleme ve Supabase havuz senkronu</p>
+            </header>
+
+            <article class="content">
+                @Body
+            </article>
+        </main>
+    </div>
+}
+else
+{
+    <main class="guest-main">
+        @Body
     </main>
-</div>
+}
+
+@code {
+    private bool _isAuthenticated;
+
+    private bool ShowWorkspaceChrome => _isAuthenticated;
+
+    protected override async Task OnInitializedAsync()
+    {
+        AuthService.SessionChanged += HandleSessionChanged;
+
+        var session = await AuthService.RestoreSessionAsync();
+        _isAuthenticated = session?.IsAuthenticated == true;
+    }
+
+    private void HandleSessionChanged(AuthSession? session)
+    {
+        _isAuthenticated = session?.IsAuthenticated == true;
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        AuthService.SessionChanged -= HandleSessionChanged;
+    }
+}

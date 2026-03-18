@@ -1,4 +1,8 @@
-﻿<div class="top-row ps-3 navbar navbar-dark">
+﻿@implements IDisposable
+@inject IAuthService AuthService
+@inject IUserPermissionService PermissionService
+
+<div class="top-row ps-3 navbar navbar-dark">
     <div class="container-fluid">
         <a class="navbar-brand" href="">FRP Helper</a>
         <button title="Navigation menu" class="navbar-toggler" @onclick="ToggleNavMenu">
@@ -12,23 +16,70 @@
         <div class="nav-item px-3">
             <NavLink class="nav-link" href="" Match="NavLinkMatch.All">
                 <span class="nav-dot" aria-hidden="true"></span>
-                <span>Rapor Havuzu</span>
+                <span>Çalışma Alanı</span>
             </NavLink>
         </div>
-        <div class="nav-sep"></div>
-        <a class="nav-external px-3" href="https://github.com/ilkrdnr/MyRepository" target="_blank" rel="noopener noreferrer">
-            GitHub Repo
-        </a>
+
+        @if (_isAdmin)
+        {
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="admin">
+                    <span class="nav-dot admin" aria-hidden="true"></span>
+                    <span>Admin Paneli</span>
+                </NavLink>
+            </div>
+        }
     </nav>
 </div>
 
 @code {
     private bool collapseNavMenu = true;
+    private bool _isAdmin;
 
     private string? NavMenuCssClass => collapseNavMenu ? "collapse" : null;
+
+    protected override async Task OnInitializedAsync()
+    {
+        AuthService.SessionChanged += HandleSessionChanged;
+        PermissionService.PermissionChanged += HandlePermissionChanged;
+
+        var session = await AuthService.RestoreSessionAsync();
+        if (session?.IsAuthenticated == true)
+        {
+            _ = await PermissionService.RefreshMyPermissionsAsync();
+            _isAdmin = PermissionService.IsAdmin;
+        }
+    }
 
     private void ToggleNavMenu()
     {
         collapseNavMenu = !collapseNavMenu;
+    }
+
+    private async void HandleSessionChanged(AuthSession? session)
+    {
+        if (session?.IsAuthenticated == true)
+        {
+            _ = await PermissionService.RefreshMyPermissionsAsync();
+            _isAdmin = PermissionService.IsAdmin;
+        }
+        else
+        {
+            _isAdmin = false;
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async void HandlePermissionChanged(UserPermissionRow? _)
+    {
+        _isAdmin = PermissionService.IsAdmin;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        AuthService.SessionChanged -= HandleSessionChanged;
+        PermissionService.PermissionChanged -= HandlePermissionChanged;
     }
 }

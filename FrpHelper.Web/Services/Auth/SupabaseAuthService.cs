@@ -30,7 +30,7 @@ public sealed class SupabaseAuthService(
         !string.IsNullOrWhiteSpace(_options.Url) &&
         !string.IsNullOrWhiteSpace(_options.PublishableKey);
 
-    public async Task<AuthOperationResult> RegisterAsync(string email, string password, CancellationToken cancellationToken = default)
+    public async Task<AuthOperationResult> RegisterAsync(string email, string password, bool rememberMe, CancellationToken cancellationToken = default)
     {
         if (!IsConfigured)
         {
@@ -69,11 +69,11 @@ public sealed class SupabaseAuthService(
             return AuthOperationResult.Failure("Kayıt tamamlandı. E-posta doğrulama sonrası giriş yapın.");
         }
 
-        await PersistSessionAsync(session, cancellationToken);
+        await PersistSessionAsync(session, rememberMe, cancellationToken);
         return AuthOperationResult.Success("Kayıt başarılı. Oturum açıldı.", session);
     }
 
-    public async Task<AuthOperationResult> LoginAsync(string email, string password, CancellationToken cancellationToken = default)
+    public async Task<AuthOperationResult> LoginAsync(string email, string password, bool rememberMe, CancellationToken cancellationToken = default)
     {
         if (!IsConfigured)
         {
@@ -112,8 +112,41 @@ public sealed class SupabaseAuthService(
             return AuthOperationResult.Failure("Oturum verisi alınamadı.");
         }
 
-        await PersistSessionAsync(session, cancellationToken);
+        await PersistSessionAsync(session, rememberMe, cancellationToken);
         return AuthOperationResult.Success("Giriş başarılı.", session);
+    }
+
+    public async Task<AuthOperationResult> SendPasswordResetAsync(string email, CancellationToken cancellationToken = default)
+    {
+        if (!IsConfigured)
+        {
+            return AuthOperationResult.Failure("Supabase ayarları eksik. appsettings.json dosyasını kontrol edin.");
+        }
+
+        if (string.IsNullOrWhiteSpace(email))
+        {
+            return AuthOperationResult.Failure("Şifre sıfırlama için e-posta adresi zorunludur.");
+        }
+
+        var endpoint = BuildEndpoint("/auth/v1/recover");
+        var payload = new
+        {
+            email
+        };
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, endpoint);
+        request.Headers.Add("apikey", _options.PublishableKey);
+        request.Content = JsonContent.Create(payload);
+
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            return AuthOperationResult.Failure(BuildErrorMessage(body, "Şifre sıfırlama isteği gönderilemedi."));
+        }
+
+        return AuthOperationResult.Success("Şifre sıfırlama bağlantısı gönderildi. E-posta kutunuzu kontrol edin.");
     }
 
     public async Task<AuthSession?> RestoreSessionAsync(CancellationToken cancellationToken = default)
@@ -129,6 +162,14 @@ public sealed class SupabaseAuthService(
         try
         {
             var restored = JsonSerializer.Deserialize<AuthSession>(sessionJson, JsonOptions());
+            if (restored?.ExpiresAt is not null && restored.ExpiresAt <= DateTimeOffset.UtcNow)
+            {
+                await _clientStorage.RemoveItemAsync(SessionKey, cancellationToken);
+                CurrentSession = null;
+                SessionChanged?.Invoke(null);
+                return null;
+            }
+
             CurrentSession = restored;
             SessionChanged?.Invoke(CurrentSession);
             return CurrentSession;
@@ -160,11 +201,20 @@ public sealed class SupabaseAuthService(
         SessionChanged?.Invoke(null);
     }
 
-    private async Task PersistSessionAsync(AuthSession session, CancellationToken cancellationToken)
+    private async Task PersistSessionAsync(AuthSession session, bool rememberMe, CancellationToken cancellationToken)
     {
         CurrentSession = session;
-        var json = JsonSerializer.Serialize(session, JsonOptions());
-        await _clientStorage.SetItemAsync(SessionKey, json, cancellationToken);
+
+        if (rememberMe)
+        {
+            var json = JsonSerializer.Serialize(session, JsonOptions());
+            await _clientStorage.SetItemAsync(SessionKey, json, cancellationToken);
+        }
+        else
+        {
+            await _clientStorage.RemoveItemAsync(SessionKey, cancellationToken);
+        }
+
         SessionChanged?.Invoke(CurrentSession);
     }
 

@@ -54,9 +54,9 @@ public sealed class ReportExportService(IJSRuntime jsRuntime) : IReportExportSer
         var xmlContent = document.ToString(SaveOptions.None);
         var bytes = System.Text.Encoding.UTF8.GetBytes(xmlContent);
         var base64 = Convert.ToBase64String(bytes);
-        var targetFileName = $"{Path.GetFileNameWithoutExtension(report.FileName)}.frx";
+        var targetFileName = $"{Path.GetFileNameWithoutExtension(report.FileName)}.frp";
 
-        await jsRuntime.InvokeVoidAsync("frpHelper.downloadBase64", cancellationToken, targetFileName, "application/xml", base64);
+        await jsRuntime.InvokeVoidAsync("frpHelper.downloadBase64", cancellationToken, targetFileName, "application/octet-stream", base64);
     }
 
     private static void SetAttributeValue(XElement element, string value, params string[] candidateNames)

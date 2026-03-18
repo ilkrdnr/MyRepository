@@ -51,19 +51,9 @@
     box-shadow: 0 0 0 4px rgba(123, 230, 175, 0.18);
 }
 
-.nav-sep {
-    border-top: 1px dashed rgba(255, 255, 255, 0.2);
-    margin: 0.55rem 0.8rem;
-}
-
-.nav-external {
-    font-size: 0.8rem;
-    color: rgba(227, 238, 248, 0.9);
-    text-decoration: none;
-}
-
-.nav-external:hover {
-    color: #fff;
+.nav-dot.admin {
+    background: #ffc857;
+    box-shadow: 0 0 0 4px rgba(255, 200, 87, 0.2);
 }
 
 @media (min-width: 921px) {

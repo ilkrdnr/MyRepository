@@ -1,0 +1,79 @@
+.admin-shell {
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    background: #fff;
+    padding: 0.9rem;
+    box-shadow: 0 14px 30px -28px rgba(15, 56, 83, 0.55);
+}
+
+.admin-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.7rem;
+    margin-bottom: 0.7rem;
+}
+
+.admin-head h2 {
+    margin: 0;
+    color: #14324f;
+    font-size: 1.1rem;
+    font-family: var(--font-title);
+}
+
+.admin-head p {
+    margin: 0.2rem 0 0;
+    color: #51708d;
+    font-size: 0.8rem;
+}
+
+.admin-table-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+}
+
+.admin-table {
+    width: 100%;
+    border-collapse: collapse;
+    min-width: 900px;
+}
+
+.admin-table th,
+.admin-table td {
+    border-bottom: 1px solid var(--line);
+    padding: 0.55rem;
+    text-align: left;
+    font-size: 0.8rem;
+    color: #264563;
+}
+
+.admin-table th {
+    background: #f6fbff;
+    color: #3f5f7e;
+    font-size: 0.74rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.admin-table tr:last-child td {
+    border-bottom: 0;
+}
+
+.mail {
+    font-weight: 600;
+    color: #153956;
+}
+
+.uid {
+    margin-top: 0.12rem;
+    font-size: 0.71rem;
+    color: #55718a;
+    font-family: var(--font-mono);
+    word-break: break-all;
+}
+
+.btn.compact {
+    font-size: 0.74rem;
+    padding: 0.34rem 0.6rem;
+}

@@ -1,0 +1,182 @@
+@page "/admin"
+@implements IDisposable
+@inject IAuthService AuthService
+@inject IUserPermissionService PermissionService
+
+<PageTitle>Admin Paneli</PageTitle>
+
+<div class="admin-shell">
+    <header class="admin-head">
+        <div>
+            <h2>Yönetici Paneli</h2>
+            <p>Kullanıcı yetkilerini buradan düzenleyebilirsiniz.</p>
+        </div>
+
+        <button class="btn btn-soft" @onclick="LoadUsersAsync" disabled="@_busy">Listeyi Yenile</button>
+    </header>
+
+    @if (!string.IsNullOrWhiteSpace(_message))
+    {
+        <div class="status @_messageLevel">@_message</div>
+    }
+
+    @if (!_isAuthenticated)
+    {
+        <div class="status warning">Admin panelini görmek için önce giriş yapmalısınız.</div>
+    }
+    else if (!_isAdmin)
+    {
+        <div class="status error">Bu sayfa yalnızca yönetici kullanıcılar içindir.</div>
+    }
+    else
+    {
+        <section class="admin-table-wrap">
+            <table class="admin-table">
+                <thead>
+                    <tr>
+                        <th>Kullanıcı</th>
+                        <th>Admin</th>
+                        <th>Havuz Görüntüleme</th>
+                        <th>Havuza Yükleme</th>
+                        <th>Rapor Düzenleme</th>
+                        <th>İşlem</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (_users.Count == 0)
+                    {
+                        <tr>
+                            <td colspan="6">Henüz kullanıcı kaydı yok.</td>
+                        </tr>
+                    }
+                    else
+                    {
+                        @foreach (var user in _users)
+                        {
+                            <tr>
+                                <td>
+                                    <div class="mail">@user.Email</div>
+                                    <div class="uid">@user.UserId</div>
+                                </td>
+                                <td>
+                                    <input type="checkbox" @bind="user.IsAdmin" disabled="@IsCurrentUser(user)" />
+                                </td>
+                                <td>
+                                    <input type="checkbox" @bind="user.CanViewPool" />
+                                </td>
+                                <td>
+                                    <input type="checkbox" @bind="user.CanUploadPool" />
+                                </td>
+                                <td>
+                                    <input type="checkbox" @bind="user.CanEditReports" />
+                                </td>
+                                <td>
+                                    <button class="btn btn-main compact" @onclick="() => SaveUserAsync(user)" disabled="@_busy">Kaydet</button>
+                                </td>
+                            </tr>
+                        }
+                    }
+                </tbody>
+            </table>
+        </section>
+    }
+</div>
+
+@code {
+    private readonly List<UserPermissionRow> _users = new();
+
+    private bool _busy;
+    private bool _isAuthenticated;
+    private bool _isAdmin;
+    private string _message = string.Empty;
+    private string _messageLevel = "info";
+
+    protected override async Task OnInitializedAsync()
+    {
+        AuthService.SessionChanged += HandleSessionChanged;
+        PermissionService.PermissionChanged += HandlePermissionChanged;
+
+        var session = await AuthService.RestoreSessionAsync();
+        _isAuthenticated = session?.IsAuthenticated == true;
+
+        if (_isAuthenticated)
+        {
+            _ = await PermissionService.EnsureCurrentUserRecordAsync();
+            _ = await PermissionService.RefreshMyPermissionsAsync();
+            _isAdmin = PermissionService.IsAdmin;
+
+            if (_isAdmin)
+            {
+                await LoadUsersAsync();
+            }
+        }
+    }
+
+    private async Task LoadUsersAsync()
+    {
+        if (!_isAuthenticated || !_isAdmin)
+        {
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            var rows = await PermissionService.GetAllUsersAsync();
+            _users.Clear();
+            _users.AddRange(rows);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task SaveUserAsync(UserPermissionRow row)
+    {
+        _busy = true;
+        try
+        {
+            var result = await PermissionService.UpdateUserPermissionsAsync(row);
+            _message = result.Message;
+            _messageLevel = result.IsSuccess ? "success" : "error";
+
+            if (result.IsSuccess)
+            {
+                await LoadUsersAsync();
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private bool IsCurrentUser(UserPermissionRow row) =>
+        string.Equals(row.UserId, AuthService.CurrentSession?.UserId, StringComparison.OrdinalIgnoreCase);
+
+    private async void HandleSessionChanged(AuthSession? session)
+    {
+        _isAuthenticated = session?.IsAuthenticated == true;
+        _isAdmin = PermissionService.IsAdmin;
+
+        if (!_isAuthenticated)
+        {
+            _users.Clear();
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async void HandlePermissionChanged(UserPermissionRow? _)
+    {
+        _isAdmin = PermissionService.IsAdmin;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        AuthService.SessionChanged -= HandleSessionChanged;
+        PermissionService.PermissionChanged -= HandlePermissionChanged;
+    }
+}

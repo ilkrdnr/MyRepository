@@ -18,6 +18,8 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      CUSTOM_DOMAIN: ${{ vars.CUSTOM_DOMAIN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -29,11 +31,22 @@ jobs:
 
       - name: Publish Blazor app
         run: |
-          dotnet publish FrpHelper.Web/FrpHelper.Web.csproj -c Release -o publish /p:StaticWebAssetBasePath=${{ github.event.repository.name }}
+          if [ -n "${CUSTOM_DOMAIN}" ]; then
+            dotnet publish FrpHelper.Web/FrpHelper.Web.csproj -c Release -o publish /p:StaticWebAssetBasePath=/
+          else
+            dotnet publish FrpHelper.Web/FrpHelper.Web.csproj -c Release -o publish /p:StaticWebAssetBasePath=${{ github.event.repository.name }}
+          fi
 
       - name: Configure base path for Pages
         run: |
-          sed -i "s|<base href=\"/\" />|<base href=\"/${{ github.event.repository.name }}/\" />|g" publish/wwwroot/index.html
+          if [ -z "${CUSTOM_DOMAIN}" ]; then
+            sed -i "s|<base href=\"/\" />|<base href=\"/${{ github.event.repository.name }}/\" />|g" publish/wwwroot/index.html
+          fi
+
+          if [ -n "${CUSTOM_DOMAIN}" ]; then
+            echo "${CUSTOM_DOMAIN}" > publish/wwwroot/CNAME
+          fi
+
           cp publish/wwwroot/index.html publish/wwwroot/404.html
 
       - name: Upload Pages artifact

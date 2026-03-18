@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using FrpHelper.Web.Configuration;
 using FrpHelper.Web.Models;
 using FrpHelper.Web.Services.Auth;
+using FrpHelper.Web.Services.Permissions;
 using Microsoft.Extensions.Options;
 
 namespace FrpHelper.Web.Services.Supabase;
@@ -13,11 +14,13 @@ namespace FrpHelper.Web.Services.Supabase;
 public sealed class SupabaseReportService(
     HttpClient httpClient,
     IOptions<SupabaseOptions> options,
-    IAuthService authService) : ISupabaseReportService
+    IAuthService authService,
+    IUserPermissionService permissionService) : ISupabaseReportService
 {
     private readonly HttpClient _httpClient = httpClient;
     private readonly SupabaseOptions _options = options.Value;
     private readonly IAuthService _authService = authService;
+    private readonly IUserPermissionService _permissionService = permissionService;
 
     public bool IsConfigured =>
         !string.IsNullOrWhiteSpace(_options.Url) &&
@@ -33,6 +36,11 @@ public sealed class SupabaseReportService(
         if (!_authService.IsAuthenticated)
         {
             return SupabaseOperationResult.Failure("Yükleme için giriş yapmalısınız.");
+        }
+
+        if (!_permissionService.CanUploadPool)
+        {
+            return SupabaseOperationResult.Failure("Rapor yükleme yetkiniz bulunmuyor.");
         }
 
         var baseUrl = _options.Url.TrimEnd('/');
@@ -68,7 +76,8 @@ public sealed class SupabaseReportService(
                 file_url = publicUrl,
                 source_created_at = report.Metadata.CreatedAt,
                 source_modified_at = report.Metadata.ModifiedAt,
-                owner_id = _authService.CurrentSession?.UserId
+                owner_id = _authService.CurrentSession?.UserId,
+                owner_email = _authService.CurrentSession?.Email
             }
         };
 
@@ -98,9 +107,14 @@ public sealed class SupabaseReportService(
             return Array.Empty<SupabaseReportRow>();
         }
 
+        if (!_permissionService.CanViewPool)
+        {
+            return Array.Empty<SupabaseReportRow>();
+        }
+
         var safeLimit = Math.Clamp(limit, 1, 200);
         var baseUrl = _options.Url.TrimEnd('/');
-        var query = $"{baseUrl}/rest/v1/{_options.ReportsTable}?select=id,report_name,report_code,description,file_url,created_at&order=created_at.desc&limit={safeLimit}";
+        var query = $"{baseUrl}/rest/v1/{_options.ReportsTable}?select=id,report_name,report_code,description,sql_content,pascal_content,file_url,file_path,owner_id,owner_email,created_at,updated_at&order=created_at.desc&limit={safeLimit}";
 
         using var request = new HttpRequestMessage(HttpMethod.Get, query);
         AddSupabaseHeaders(request, includePrefer: false);
@@ -113,6 +127,90 @@ public sealed class SupabaseReportService(
 
         var rows = await response.Content.ReadFromJsonAsync<List<SupabaseReportRow>>(cancellationToken: cancellationToken);
         return rows ?? new List<SupabaseReportRow>();
+    }
+
+    public async Task<SupabaseOperationResult> UpdateReportMetadataAsync(SupabaseReportRow row, CancellationToken cancellationToken = default)
+    {
+        if (!IsConfigured)
+        {
+            return SupabaseOperationResult.Failure("Supabase ayarları eksik.");
+        }
+
+        if (!_authService.IsAuthenticated)
+        {
+            return SupabaseOperationResult.Failure("Önce giriş yapmalısınız.");
+        }
+
+        if (!_permissionService.IsAdmin)
+        {
+            return SupabaseOperationResult.Failure("Bu işlem için yönetici yetkisi gerekiyor.");
+        }
+
+        var baseUrl = _options.Url.TrimEnd('/');
+        var updateUrl = $"{baseUrl}/rest/v1/{_options.ReportsTable}?id=eq.{row.Id}";
+
+        var payload = new
+        {
+            report_name = row.ReportName,
+            report_code = row.ReportCode,
+            description = row.Description
+        };
+
+        using var request = new HttpRequestMessage(HttpMethod.Patch, updateUrl);
+        AddSupabaseHeaders(request, includePrefer: true);
+        request.Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
+
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            var body = await response.Content.ReadAsStringAsync(cancellationToken);
+            return SupabaseOperationResult.Failure($"Rapor güncellenemedi: {(int)response.StatusCode} - {body}");
+        }
+
+        return SupabaseOperationResult.Success("Rapor bilgisi güncellendi.");
+    }
+
+    public async Task<SupabaseOperationResult> DeleteReportAsync(SupabaseReportRow row, CancellationToken cancellationToken = default)
+    {
+        if (!IsConfigured)
+        {
+            return SupabaseOperationResult.Failure("Supabase ayarları eksik.");
+        }
+
+        if (!_authService.IsAuthenticated)
+        {
+            return SupabaseOperationResult.Failure("Önce giriş yapmalısınız.");
+        }
+
+        if (!_permissionService.IsAdmin)
+        {
+            return SupabaseOperationResult.Failure("Bu işlem için yönetici yetkisi gerekiyor.");
+        }
+
+        var baseUrl = _options.Url.TrimEnd('/');
+
+        if (!string.IsNullOrWhiteSpace(row.FilePath))
+        {
+            var encodedPath = string.Join("/", row.FilePath.Split('/', StringSplitOptions.RemoveEmptyEntries).Select(Uri.EscapeDataString));
+            var storageUrl = $"{baseUrl}/storage/v1/object/{_options.StorageBucket}/{encodedPath}";
+
+            using var storageDeleteRequest = new HttpRequestMessage(HttpMethod.Delete, storageUrl);
+            AddSupabaseHeaders(storageDeleteRequest, includePrefer: false);
+            _ = await _httpClient.SendAsync(storageDeleteRequest, cancellationToken);
+        }
+
+        var deleteUrl = $"{baseUrl}/rest/v1/{_options.ReportsTable}?id=eq.{row.Id}";
+        using var dbDeleteRequest = new HttpRequestMessage(HttpMethod.Delete, deleteUrl);
+        AddSupabaseHeaders(dbDeleteRequest, includePrefer: false);
+
+        using var dbDeleteResponse = await _httpClient.SendAsync(dbDeleteRequest, cancellationToken);
+        if (!dbDeleteResponse.IsSuccessStatusCode)
+        {
+            var body = await dbDeleteResponse.Content.ReadAsStringAsync(cancellationToken);
+            return SupabaseOperationResult.Failure($"Rapor silinemedi: {(int)dbDeleteResponse.StatusCode} - {body}");
+        }
+
+        return SupabaseOperationResult.Success("Rapor havuzdan silindi.");
     }
 
     private void AddSupabaseHeaders(HttpRequestMessage request, bool includePrefer)
@@ -138,7 +236,7 @@ public sealed class SupabaseReportService(
     private static string BuildStoragePath(string fileName)
     {
         var nameWithoutExtension = Path.GetFileNameWithoutExtension(fileName);
-        var extension = Path.GetExtension(fileName);
+        var extension = ".frp";
         var safeName = Regex.Replace(nameWithoutExtension, "[^a-zA-Z0-9_-]", "_");
         var prefix = DateTime.UtcNow.ToString("yyyy/MM/dd");
 

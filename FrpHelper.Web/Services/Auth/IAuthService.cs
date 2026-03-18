@@ -10,9 +10,11 @@ public interface IAuthService
 
     event Action<AuthSession?>? SessionChanged;
 
-    Task<AuthOperationResult> RegisterAsync(string email, string password, CancellationToken cancellationToken = default);
+    Task<AuthOperationResult> RegisterAsync(string email, string password, bool rememberMe, CancellationToken cancellationToken = default);
 
-    Task<AuthOperationResult> LoginAsync(string email, string password, CancellationToken cancellationToken = default);
+    Task<AuthOperationResult> LoginAsync(string email, string password, bool rememberMe, CancellationToken cancellationToken = default);
+
+    Task<AuthOperationResult> SendPasswordResetAsync(string email, CancellationToken cancellationToken = default);
 
     Task<AuthSession?> RestoreSessionAsync(CancellationToken cancellationToken = default);
 

@@ -11,4 +11,6 @@ public sealed class SupabaseOptions
     public string StorageBucket { get; set; } = "frp-files";
 
     public string ReportsTable { get; set; } = "reports";
+
+    public string PermissionsTable { get; set; } = "user_permissions";
 }
