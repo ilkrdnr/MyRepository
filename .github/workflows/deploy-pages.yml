@@ -39,15 +39,30 @@ jobs:
 
       - name: Configure base path for Pages
         run: |
-          if [ -z "${CUSTOM_DOMAIN}" ]; then
-            sed -i "s|<base href=\"/\" />|<base href=\"/${{ github.event.repository.name }}/\" />|g" publish/wwwroot/index.html
+          INDEX_FILE="publish/wwwroot/index.html"
+
+          if [ ! -f "${INDEX_FILE}" ]; then
+            echo "index.html bulunamadi: ${INDEX_FILE}"
+            find publish -maxdepth 4 -type f
+            exit 1
           fi
 
-          if [ -n "${CUSTOM_DOMAIN}" ]; then
+          if [ -z "${CUSTOM_DOMAIN}" ]; then
+            python3 - <<'PY'
+from pathlib import Path
+import os
+
+index = Path("publish/wwwroot/index.html")
+content = index.read_text(encoding="utf-8")
+repo_name = os.environ["GITHUB_REPOSITORY"].split("/", 1)[1]
+content = content.replace('<base href="/" />', f'<base href="/{repo_name}/" />')
+index.write_text(content, encoding="utf-8")
+PY
+          else
             echo "${CUSTOM_DOMAIN}" > publish/wwwroot/CNAME
           fi
 
-          cp publish/wwwroot/index.html publish/wwwroot/404.html
+          cp "${INDEX_FILE}" publish/wwwroot/404.html
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
