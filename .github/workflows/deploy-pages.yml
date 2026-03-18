@@ -31,11 +31,7 @@ jobs:
 
       - name: Publish Blazor app
         run: |
-          if [ -n "${CUSTOM_DOMAIN}" ]; then
-            dotnet publish FrpHelper.Web/FrpHelper.Web.csproj -c Release -o publish /p:StaticWebAssetBasePath=/
-          else
-            dotnet publish FrpHelper.Web/FrpHelper.Web.csproj -c Release -o publish /p:StaticWebAssetBasePath=${{ github.event.repository.name }}
-          fi
+          dotnet publish FrpHelper.Web/FrpHelper.Web.csproj -c Release -o publish
 
       - name: Configure base path for Pages
         run: |
@@ -50,6 +46,7 @@ jobs:
           if [ -z "${CUSTOM_DOMAIN}" ]; then
             python3 -c "from pathlib import Path; import os; p = Path('publish/wwwroot/index.html'); t = p.read_text(encoding='utf-8'); r = os.environ['GITHUB_REPOSITORY'].split('/', 1)[1]; p.write_text(t.replace('<base href=\"/\" />', f'<base href=\"/{r}/\" />'), encoding='utf-8')"
           else
+            python3 -c "from pathlib import Path; p = Path('publish/wwwroot/index.html'); t = p.read_text(encoding='utf-8'); p.write_text(t.replace('<base href=\"/\" />', '<base href=\"/\" />'), encoding='utf-8')"
             echo "${CUSTOM_DOMAIN}" > publish/wwwroot/CNAME
           fi
 
