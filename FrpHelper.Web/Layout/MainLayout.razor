@@ -1,6 +1,8 @@
 ﻿@inherits LayoutComponentBase
 @implements IDisposable
 @inject IAuthService AuthService
+@inject IJSRuntime JS
+@inject NavigationManager Navigation
 
 @if (ShowWorkspaceChrome)
 {
@@ -30,6 +32,7 @@ else
 
 @code {
     private bool _isAuthenticated;
+    private bool _hashRouteChecked;
 
     private bool ShowWorkspaceChrome => _isAuthenticated;
 
@@ -39,6 +42,24 @@ else
 
         var session = await AuthService.RestoreSessionAsync();
         _isAuthenticated = session?.IsAuthenticated == true;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || _hashRouteChecked)
+        {
+            return;
+        }
+
+        _hashRouteChecked = true;
+
+        var route = await JS.InvokeAsync<string>("frpRouting.takeHashRoute");
+        if (string.IsNullOrWhiteSpace(route) || !route.StartsWith('/'))
+        {
+            return;
+        }
+
+        Navigation.NavigateTo(route, replace: true);
     }
 
     private void HandleSessionChanged(AuthSession? session)
