@@ -1,4 +1,6 @@
-﻿@page "/"
+@page "/"
+@implements IDisposable
+@inject IAuthService AuthService
 @inject IArchiveService ArchiveService
 @inject IReportParserService ParserService
 @inject IReportExportService ExportService
@@ -6,321 +8,489 @@
 
 <PageTitle>FRP Helper</PageTitle>
 
-<div class="screen">
-	<section class="pane">
-		<header class="pane-header">
-			<h2>Dosya Yükleme</h2>
-			<span class="hint">Çoklu seçim desteklenir</span>
-		</header>
-		<div class="pane-content">
-			<div class="drop-zone @(_isDragging ? "dragging" : string.Empty)"
-				 @ondragover="OnDragOver"
-				 @ondragleave="OnDragLeave"
-				 @ondrop="OnDragLeave"
-				 @ondrop:preventDefault>
-				<div class="drop-text">
-					<div><strong>FRP/FRX/XML/ZIP/RAR</strong> dosyalarını buraya bırakın</div>
-					<div class="hint">veya tıklayıp seçin</div>
-				</div>
-				<InputFile class="drop-input" OnChange="OnFilesSelected" multiple accept=".frp,.frx,.xml,.zip,.rar" />
-			</div>
-
-			@if (!string.IsNullOrWhiteSpace(_statusMessage))
-			{
-				<div class="status">@_statusMessage</div>
-			}
-
-			<div class="report-list">
-				@if (_reports.Count == 0)
-				{
-					<div class="hint" style="padding:0.8rem;">Henüz rapor yok. En az bir FRP/FRX yükleyin.</div>
-				}
-				else
-				{
-					@foreach (var report in _reports.OrderByDescending(x => x.ImportedAtUtc))
-					{
-						<button type="button"
-								class="report-item @(report.Id == _selectedReport?.Id ? "active" : string.Empty)"
-								@ondblclick="() => SelectReport(report)">
-							<div>
-								<div class="ri-title">@report.Metadata.ReportName</div>
-								<div class="ri-sub">@report.FileName</div>
-							</div>
-							<div class="ri-count">SQL @report.SqlSections.Count</div>
-						</button>
-					}
-				}
-			</div>
-
-			<div class="cloud-list">
-				<div class="pane-header" style="padding:0 0 0.5rem 0; border-bottom:0; background:transparent;">
-					<h2>Bulut Kayıtları</h2>
-					<button class="btn btn-muted" style="padding:0.35rem 0.55rem;" @onclick="RefreshCloudAsync" disabled="@_busy">Yenile</button>
-				</div>
-
-				@if (_cloudRows.Count == 0)
-				{
-					<div class="hint">Supabase tablosunda kayıt bulunamadı veya şema henüz oluşturulmadı.</div>
-				}
-				else
-				{
-					@foreach (var row in _cloudRows)
-					{
-						<div class="cloud-row">
-							<div>
-								<div class="ri-title">@row.ReportName</div>
-								<div class="ri-sub">@row.ReportCode • @row.CreatedAt.LocalDateTime.ToString("g")</div>
-							</div>
-							<a href="@row.FileUrl" target="_blank" rel="noopener noreferrer">İndir</a>
-						</div>
-					}
-				}
-			</div>
-		</div>
-	</section>
-
-	<section class="pane">
-		<header class="pane-header">
-			<h2>Rapor Detayı</h2>
-			@if (_selectedReport is not null)
-			{
-				<span class="hint">Açılış için solda rapora çift tıklayın</span>
-			}
-		</header>
-
-		<div class="pane-content">
-			@if (_selectedReport is null)
-			{
-				<div class="hint">Henüz bir rapor seçilmedi.</div>
-			}
-			else
-			{
-				<div class="meta-grid">
-					<div class="meta-card">
-						<div class="meta-label">Rapor Adı</div>
-						<div class="meta-value">@_selectedReport.Metadata.ReportName</div>
-					</div>
-					<div class="meta-card">
-						<div class="meta-label">Rapor Kodu</div>
-						<div class="meta-value">@(_selectedReport.Metadata.ReportCode == string.Empty ? "-" : _selectedReport.Metadata.ReportCode)</div>
-					</div>
-					<div class="meta-card">
-						<div class="meta-label">Oluşturma</div>
-						<div class="meta-value">@FormatDate(_selectedReport.Metadata.CreatedAt)</div>
-					</div>
-					<div class="meta-card">
-						<div class="meta-label">Son Değişim</div>
-						<div class="meta-value">@FormatDate(_selectedReport.Metadata.ModifiedAt)</div>
-					</div>
-				</div>
-
-				<textarea class="description"
-						  @bind="_selectedReport.Metadata.Description"
-						  placeholder="Açıklama notu (isteğe bağlı)"></textarea>
-
-				<div class="actions">
-					<button class="btn btn-secondary" @onclick="DownloadCurrentAsync" disabled="@_busy">FRX Olarak Kaydet</button>
-					<button class="btn btn-primary" @onclick="UploadCurrentAsync" disabled="@(!_canUpload || _busy)">Supabase'a Yükle</button>
-					<button class="btn btn-muted" @onclick="RefreshCloudAsync" disabled="@_busy">Bulut Listele</button>
-				</div>
-
-				<div class="section-stack">
-					<div class="meta-label" style="margin-top:0.4rem;">SQL Sorguları</div>
-					@for (var i = 0; i < _selectedReport.SqlSections.Count; i++)
-					{
-						var index = i;
-						var key = $"sql-{index}";
-						<div class="section-box">
-							<button class="section-header" @onclick="() => Toggle(key)">
-								<span>@(IsOpen(key) ? "▼" : "▶")</span>
-								<span>@_selectedReport.SqlSections[index].Title</span>
-							</button>
-
-							@if (IsOpen(key))
-							{
-								<textarea class="code-editor" @bind="_selectedReport.SqlSections[index].Content"></textarea>
-							}
-						</div>
-					}
-
-					<div class="meta-label" style="margin-top:0.55rem;">Pascal Kodları</div>
-					@for (var i = 0; i < _selectedReport.ScriptSections.Count; i++)
-					{
-						var index = i;
-						var key = $"psc-{index}";
-						<div class="section-box">
-							<button class="section-header" @onclick="() => Toggle(key)">
-								<span>@(IsOpen(key) ? "▼" : "▶")</span>
-								<span>@_selectedReport.ScriptSections[index].Title</span>
-							</button>
-
-							@if (IsOpen(key))
-							{
-								<textarea class="code-editor" @bind="_selectedReport.ScriptSections[index].Content"></textarea>
-							}
-						</div>
-					}
-				</div>
-			}
-		</div>
-	</section>
+<div class="hero">
+    <h2>FRP Pool</h2>
+    <p>Giris yapan herkes rapor havuzunu gorur, indirir ve yeni FRP ekleyebilir.</p>
 </div>
 
+<div class="workspace">
+    <section class="left-col">
+        <article class="panel auth-panel">
+            <header class="panel-head">
+                <h3>Hesap</h3>
+            </header>
+
+            @if (!IsAuthenticated)
+            {
+                <div class="auth-toggle">
+                    <button class="chip @(_isLoginMode ? "active" : string.Empty)" @onclick="() => _isLoginMode = true">Giris</button>
+                    <button class="chip @(!_isLoginMode ? "active" : string.Empty)" @onclick="() => _isLoginMode = false">Kayit</button>
+                </div>
+
+                <label class="field-label">E-posta</label>
+                <input class="field" type="email" @bind="_email" placeholder="ad@ornek.com" />
+
+                <label class="field-label">Sifre</label>
+                <input class="field" type="password" @bind="_password" placeholder="En az 6 karakter" />
+
+                <button class="btn btn-main" @onclick="SubmitAuthAsync" disabled="@_busyAuth">
+                    @(_isLoginMode ? "Giris Yap" : "Kayit Ol")
+                </button>
+            }
+            else
+            {
+                <div class="session-box">
+                    <div class="session-label">Aktif Kullanici</div>
+                    <div class="session-value">@_session?.Email</div>
+                    <button class="btn btn-soft" @onclick="LogoutAsync" disabled="@_busyAuth">Cikis Yap</button>
+                </div>
+            }
+
+            @if (!string.IsNullOrWhiteSpace(_authMessage))
+            {
+                <div class="status">@_authMessage</div>
+            }
+        </article>
+
+        <article class="panel">
+            <header class="panel-head">
+                <h3>Dosya Yukleme</h3>
+                <span class="mini">Toplu FRP/ZIP/RAR</span>
+            </header>
+
+            <div class="drop-zone @(_isDragging ? "dragging" : string.Empty) @(!IsAuthenticated ? "disabled" : string.Empty)"
+                 @ondragover="OnDragOver"
+                 @ondragleave="OnDragLeave"
+                 @ondrop="OnDragLeave"
+                 @ondrop:preventDefault>
+                <div class="drop-text">
+                    <div><strong>FRP/FRX/XML/ZIP/RAR</strong> buraya birakin</div>
+                    <div class="mini">veya dosya secin</div>
+                </div>
+                <InputFile class="drop-input"
+                           OnChange="OnFilesSelected"
+                           multiple
+                           accept=".frp,.frx,.xml,.zip,.rar"
+                           disabled="@(!IsAuthenticated || _busy)" />
+            </div>
+
+            @if (!string.IsNullOrWhiteSpace(_statusMessage))
+            {
+                <div class="status">@_statusMessage</div>
+            }
+        </article>
+
+        <article class="panel">
+            <header class="panel-head">
+                <h3>Yerel Raporlar</h3>
+                <span class="mini">@_reports.Count adet</span>
+            </header>
+
+            <div class="report-list">
+                @if (_reports.Count == 0)
+                {
+                    <div class="empty">Dosya eklendikten sonra burada listelenir.</div>
+                }
+                else
+                {
+                    @foreach (var report in _reports.OrderByDescending(item => item.ImportedAtUtc))
+                    {
+                        <button type="button"
+                                class="report-item @(report.Id == _selectedReport?.Id ? "active" : string.Empty)"
+                                @onclick="() => SelectReport(report)">
+                            <div class="ri-title">@report.Metadata.ReportName</div>
+                            <div class="ri-sub">@report.FileName</div>
+                            <div class="ri-count">SQL @report.SqlSections.Count | Pascal @report.ScriptSections.Count</div>
+                        </button>
+                    }
+                }
+            </div>
+        </article>
+    </section>
+
+    <section class="right-col">
+        <article class="panel detail-panel">
+            <header class="panel-head">
+                <h3>Rapor Detayi</h3>
+                <span class="mini">@(_selectedReport is null ? "Secim yok" : _selectedReport.FileName)</span>
+            </header>
+
+            @if (_selectedReport is null)
+            {
+                <div class="empty">Soldaki listeden bir rapor secin.</div>
+            }
+            else
+            {
+                <div class="meta-grid">
+                    <div class="meta-card">
+                        <div class="meta-label">Rapor Adi</div>
+                        <div class="meta-value">@_selectedReport.Metadata.ReportName</div>
+                    </div>
+                    <div class="meta-card">
+                        <div class="meta-label">Rapor Kodu</div>
+                        <div class="meta-value">@_selectedReport.Metadata.ReportCode</div>
+                    </div>
+                    <div class="meta-card">
+                        <div class="meta-label">Olusturma</div>
+                        <div class="meta-value">@FormatDate(_selectedReport.Metadata.CreatedAt)</div>
+                    </div>
+                    <div class="meta-card">
+                        <div class="meta-label">Son Degisim</div>
+                        <div class="meta-value">@FormatDate(_selectedReport.Metadata.ModifiedAt)</div>
+                    </div>
+                </div>
+
+                <textarea class="description"
+                          @bind="_selectedReport.Metadata.Description"
+                          placeholder="Aciklama notu"
+                          rows="3"></textarea>
+
+                <div class="actions">
+                    <button class="btn btn-soft" @onclick="DownloadCurrentAsync" disabled="@_busy">FRX Olarak Kaydet</button>
+                    <button class="btn btn-main" @onclick="UploadCurrentAsync" disabled="@(!_canUpload || _busy)">Havuza Yukle</button>
+                </div>
+
+                <section class="editor-block">
+                    <div class="block-title">SQL Sorgulari</div>
+                    @for (var i = 0; i < _selectedReport.SqlSections.Count; i++)
+                    {
+                        var sectionKey = $"sql-{i}";
+                        <div class="section-box">
+                            <button class="section-header" @onclick="() => Toggle(sectionKey)">
+                                <span>@(IsOpen(sectionKey) ? "-" : "+")</span>
+                                <span>@_selectedReport.SqlSections[i].Title</span>
+                            </button>
+
+                            @if (IsOpen(sectionKey))
+                            {
+                                <MonacoEditor Value="@_selectedReport.SqlSections[i].Content"
+                                              ValueChanged="@(value => OnSqlChanged(i, value))"
+                                              Language="sql"
+                                              Height="220px"
+                                              ReadOnly="false" />
+                            }
+                        </div>
+                    }
+                </section>
+
+                <section class="editor-block">
+                    <div class="block-title">Pascal Kodlari</div>
+                    @for (var i = 0; i < _selectedReport.ScriptSections.Count; i++)
+                    {
+                        var sectionKey = $"psc-{i}";
+                        <div class="section-box">
+                            <button class="section-header" @onclick="() => Toggle(sectionKey)">
+                                <span>@(IsOpen(sectionKey) ? "-" : "+")</span>
+                                <span>@_selectedReport.ScriptSections[i].Title</span>
+                            </button>
+
+                            @if (IsOpen(sectionKey))
+                            {
+                                <MonacoEditor Value="@_selectedReport.ScriptSections[i].Content"
+                                              ValueChanged="@(value => OnPascalChanged(i, value))"
+                                              Language="pascal"
+                                              Height="220px"
+                                              ReadOnly="false" />
+                            }
+                        </div>
+                    }
+                </section>
+            }
+        </article>
+    </section>
+</div>
+
+<article class="panel pool-panel">
+    <header class="panel-head">
+        <h3>Havuz</h3>
+        <button class="btn btn-soft" @onclick="RefreshCloudAsync" disabled="@(_busy || !IsAuthenticated)">Yenile</button>
+    </header>
+
+    @if (!IsAuthenticated)
+    {
+        <div class="empty">Havuz raporlarini gormek ve indirmek icin giris yapin.</div>
+    }
+    else if (_cloudRows.Count == 0)
+    {
+        <div class="empty">Havuzda kayit bulunamadi.</div>
+    }
+    else
+    {
+        <div class="pool-grid">
+            @foreach (var row in _cloudRows)
+            {
+                <div class="pool-card">
+                    <div class="ri-title">@row.ReportName</div>
+                    <div class="ri-sub">Kod: @row.ReportCode</div>
+                    <div class="ri-sub">@row.CreatedAt.LocalDateTime.ToString("g")</div>
+                    <a class="download-link" href="@row.FileUrl" target="_blank" rel="noopener noreferrer">FRP indir</a>
+                </div>
+            }
+        </div>
+    }
+</article>
+
 @code {
-	private readonly List<FrpReportDocument> _reports = new();
-	private readonly HashSet<string> _openSections = new(StringComparer.OrdinalIgnoreCase);
-	private readonly List<SupabaseReportRow> _cloudRows = new();
+    private readonly List<FrpReportDocument> _reports = new();
+    private readonly List<SupabaseReportRow> _cloudRows = new();
+    private readonly HashSet<string> _openSections = new(StringComparer.OrdinalIgnoreCase);
 
-	private FrpReportDocument? _selectedReport;
-	private string _statusMessage = string.Empty;
-	private bool _busy;
-	private bool _isDragging;
+    private FrpReportDocument? _selectedReport;
+    private AuthSession? _session;
 
-	private bool _canUpload => _selectedReport is not null && SupabaseReportService.IsConfigured;
+    private string _statusMessage = string.Empty;
+    private string _authMessage = string.Empty;
+    private string _email = string.Empty;
+    private string _password = string.Empty;
 
-	protected override async Task OnInitializedAsync()
-	{
-		await RefreshCloudAsync();
-	}
+    private bool _isLoginMode = true;
+    private bool _isDragging;
+    private bool _busy;
+    private bool _busyAuth;
 
-	private async Task OnFilesSelected(InputFileChangeEventArgs eventArgs)
-	{
-		_busy = true;
-		_statusMessage = string.Empty;
+    private bool IsAuthenticated => _session?.IsAuthenticated == true;
+    private bool _canUpload => _selectedReport is not null && IsAuthenticated && SupabaseReportService.IsConfigured;
 
-		var successCount = 0;
-		var failed = new List<string>();
+    protected override async Task OnInitializedAsync()
+    {
+        AuthService.SessionChanged += HandleSessionChanged;
+        _session = await AuthService.RestoreSessionAsync();
 
-		try
-		{
-			foreach (var file in eventArgs.GetMultipleFiles(100))
-			{
-				try
-				{
-					await using var fileStream = file.OpenReadStream(maxAllowedSize: 30 * 1024 * 1024);
-					using var fileBuffer = new MemoryStream();
-					await fileStream.CopyToAsync(fileBuffer);
+        if (IsAuthenticated)
+        {
+            await RefreshCloudAsync();
+        }
+    }
 
-					var expandedFiles = await ArchiveService.ExpandAsync(file.Name, fileBuffer.ToArray());
+    private async Task SubmitAuthAsync()
+    {
+        _busyAuth = true;
+        try
+        {
+            AuthOperationResult result;
+            if (_isLoginMode)
+            {
+                result = await AuthService.LoginAsync(_email.Trim(), _password);
+            }
+            else
+            {
+                result = await AuthService.RegisterAsync(_email.Trim(), _password);
+            }
 
-					foreach (var expanded in expandedFiles)
-					{
-						await using var reportStream = new MemoryStream(expanded.Content);
-						var parsed = await ParserService.ParseAsync(expanded.FileName, reportStream);
-						_reports.Add(parsed);
-						_selectedReport ??= parsed;
-						successCount++;
-					}
-				}
-				catch (Exception exception)
-				{
-					failed.Add($"{file.Name}: {exception.Message}");
-				}
-			}
-		}
-		finally
-		{
-			_busy = false;
-		}
+            _authMessage = result.Message;
+            if (result.IsSuccess)
+            {
+                _session = result.Session;
+                _password = string.Empty;
+                await RefreshCloudAsync();
+            }
+        }
+        finally
+        {
+            _busyAuth = false;
+        }
+    }
 
-		if (failed.Count == 0)
-		{
-			_statusMessage = $"{successCount} dosya başarıyla ayrıştırıldı.";
-		}
-		else
-		{
-			_statusMessage = $"Başarılı: {successCount}, Hata: {failed.Count}. {string.Join(" | ", failed)}";
-		}
-	}
+    private async Task LogoutAsync()
+    {
+        _busyAuth = true;
+        try
+        {
+            await AuthService.LogoutAsync();
+            _session = null;
+            _cloudRows.Clear();
+            _authMessage = "Oturum kapatildi.";
+        }
+        finally
+        {
+            _busyAuth = false;
+        }
+    }
 
-	private void OnDragOver(DragEventArgs _)
-	{
-		_isDragging = true;
-	}
+    private async Task OnFilesSelected(InputFileChangeEventArgs eventArgs)
+    {
+        if (!IsAuthenticated)
+        {
+            _statusMessage = "Dosya islemleri icin once giris yapin.";
+            return;
+        }
 
-	private void OnDragLeave(DragEventArgs _)
-	{
-		_isDragging = false;
-	}
+        _busy = true;
+        _statusMessage = string.Empty;
 
-	private void SelectReport(FrpReportDocument report)
-	{
-		_selectedReport = report;
-		_openSections.Clear();
-	}
+        var successCount = 0;
+        var failed = new List<string>();
 
-	private bool IsOpen(string key) => _openSections.Contains(key);
+        try
+        {
+            foreach (var file in eventArgs.GetMultipleFiles(200))
+            {
+                try
+                {
+                    await using var fileStream = file.OpenReadStream(maxAllowedSize: 30 * 1024 * 1024);
+                    using var fileBuffer = new MemoryStream();
+                    await fileStream.CopyToAsync(fileBuffer);
 
-	private void Toggle(string key)
-	{
-		if (!_openSections.Add(key))
-		{
-			_openSections.Remove(key);
-		}
-	}
+                    var expandedFiles = await ArchiveService.ExpandAsync(file.Name, fileBuffer.ToArray());
+                    foreach (var expanded in expandedFiles)
+                    {
+                        await using var reportStream = new MemoryStream(expanded.Content);
+                        var parsed = await ParserService.ParseAsync(expanded.FileName, reportStream);
 
-	private static string FormatDate(DateTimeOffset? dateValue) =>
-		dateValue is null ? "-" : dateValue.Value.LocalDateTime.ToString("g");
+                        _reports.Add(parsed);
+                        _selectedReport ??= parsed;
+                        successCount++;
+                    }
+                }
+                catch (Exception exception)
+                {
+                    failed.Add($"{file.Name}: {exception.Message}");
+                }
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
 
-	private async Task DownloadCurrentAsync()
-	{
-		if (_selectedReport is null)
-		{
-			return;
-		}
+        _statusMessage = failed.Count == 0
+            ? $"{successCount} dosya basariyla ayristrildi."
+            : $"Basarili: {successCount}, Hata: {failed.Count}. {string.Join(" | ", failed)}";
+    }
 
-		_busy = true;
-		try
-		{
-			await ExportService.DownloadReportXmlAsync(_selectedReport);
-			_statusMessage = "Güncel içerik FRX olarak indirildi.";
-		}
-		catch (Exception exception)
-		{
-			_statusMessage = $"İndirme hatası: {exception.Message}";
-		}
-		finally
-		{
-			_busy = false;
-		}
-	}
+    private void SelectReport(FrpReportDocument report)
+    {
+        _selectedReport = report;
+    }
 
-	private async Task UploadCurrentAsync()
-	{
-		if (_selectedReport is null)
-		{
-			return;
-		}
+    private async Task UploadCurrentAsync()
+    {
+        if (_selectedReport is null)
+        {
+            return;
+        }
 
-		_busy = true;
-		try
-		{
-			var result = await SupabaseReportService.UploadReportAsync(_selectedReport, _selectedReport.Metadata.Description);
-			_statusMessage = result.Message;
+        _busy = true;
+        try
+        {
+            var result = await SupabaseReportService.UploadReportAsync(_selectedReport, _selectedReport.Metadata.Description);
+            _statusMessage = result.Message;
 
-			if (result.IsSuccess)
-			{
-				await RefreshCloudAsync();
-			}
-		}
-		finally
-		{
-			_busy = false;
-		}
-	}
+            if (result.IsSuccess)
+            {
+                await RefreshCloudAsync();
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
 
-	private async Task RefreshCloudAsync()
-	{
-		_busy = true;
-		try
-		{
-			var rows = await SupabaseReportService.GetRecentReportsAsync();
-			_cloudRows.Clear();
-			_cloudRows.AddRange(rows);
-		}
-		finally
-		{
-			_busy = false;
-		}
-	}
+    private async Task DownloadCurrentAsync()
+    {
+        if (_selectedReport is null)
+        {
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            await ExportService.DownloadReportXmlAsync(_selectedReport);
+            _statusMessage = "Guncel icerik FRX olarak indirildi.";
+        }
+        catch (Exception exception)
+        {
+            _statusMessage = $"Indirme hatasi: {exception.Message}";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task RefreshCloudAsync()
+    {
+        if (!IsAuthenticated)
+        {
+            _cloudRows.Clear();
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            var rows = await SupabaseReportService.GetRecentReportsAsync();
+            _cloudRows.Clear();
+            _cloudRows.AddRange(rows);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void OnDragOver(DragEventArgs _)
+    {
+        _isDragging = true;
+    }
+
+    private void OnDragLeave(DragEventArgs _)
+    {
+        _isDragging = false;
+    }
+
+    private bool IsOpen(string key) => _openSections.Contains(key);
+
+    private void Toggle(string key)
+    {
+        if (!_openSections.Add(key))
+        {
+            _openSections.Remove(key);
+        }
+    }
+
+    private void OnSqlChanged(int index, string value)
+    {
+        if (_selectedReport is null || index < 0 || index >= _selectedReport.SqlSections.Count)
+        {
+            return;
+        }
+
+        _selectedReport.SqlSections[index].Content = value;
+    }
+
+    private void OnPascalChanged(int index, string value)
+    {
+        if (_selectedReport is null || index < 0 || index >= _selectedReport.ScriptSections.Count)
+        {
+            return;
+        }
+
+        _selectedReport.ScriptSections[index].Content = value;
+    }
+
+    private static string FormatDate(DateTimeOffset? value) =>
+        value is null ? "-" : value.Value.LocalDateTime.ToString("g");
+
+    private async void HandleSessionChanged(AuthSession? session)
+    {
+        _session = session;
+        if (!IsAuthenticated)
+        {
+            _cloudRows.Clear();
+        }
+        else
+        {
+            await RefreshCloudAsync();
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        AuthService.SessionChanged -= HandleSessionChanged;
+    }
 }

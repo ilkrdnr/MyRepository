@@ -5,14 +5,19 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using FrpHelper.Web.Configuration;
 using FrpHelper.Web.Models;
+using FrpHelper.Web.Services.Auth;
 using Microsoft.Extensions.Options;
 
 namespace FrpHelper.Web.Services.Supabase;
 
-public sealed class SupabaseReportService(HttpClient httpClient, IOptions<SupabaseOptions> options) : ISupabaseReportService
+public sealed class SupabaseReportService(
+    HttpClient httpClient,
+    IOptions<SupabaseOptions> options,
+    IAuthService authService) : ISupabaseReportService
 {
     private readonly HttpClient _httpClient = httpClient;
     private readonly SupabaseOptions _options = options.Value;
+    private readonly IAuthService _authService = authService;
 
     public bool IsConfigured =>
         !string.IsNullOrWhiteSpace(_options.Url) &&
@@ -23,6 +28,11 @@ public sealed class SupabaseReportService(HttpClient httpClient, IOptions<Supaba
         if (!IsConfigured)
         {
             return SupabaseOperationResult.Failure("Supabase ayarları eksik. appsettings.json içindeki Supabase bölümünü kontrol edin.");
+        }
+
+        if (!_authService.IsAuthenticated)
+        {
+            return SupabaseOperationResult.Failure("Yükleme için giriş yapmalısınız.");
         }
 
         var baseUrl = _options.Url.TrimEnd('/');
@@ -57,7 +67,8 @@ public sealed class SupabaseReportService(HttpClient httpClient, IOptions<Supaba
                 file_path = storagePath,
                 file_url = publicUrl,
                 source_created_at = report.Metadata.CreatedAt,
-                source_modified_at = report.Metadata.ModifiedAt
+                source_modified_at = report.Metadata.ModifiedAt,
+                owner_id = _authService.CurrentSession?.UserId
             }
         };
 
@@ -82,6 +93,11 @@ public sealed class SupabaseReportService(HttpClient httpClient, IOptions<Supaba
             return Array.Empty<SupabaseReportRow>();
         }
 
+        if (!_authService.IsAuthenticated)
+        {
+            return Array.Empty<SupabaseReportRow>();
+        }
+
         var safeLimit = Math.Clamp(limit, 1, 200);
         var baseUrl = _options.Url.TrimEnd('/');
         var query = $"{baseUrl}/rest/v1/{_options.ReportsTable}?select=id,report_name,report_code,description,file_url,created_at&order=created_at.desc&limit={safeLimit}";
@@ -102,7 +118,16 @@ public sealed class SupabaseReportService(HttpClient httpClient, IOptions<Supaba
     private void AddSupabaseHeaders(HttpRequestMessage request, bool includePrefer)
     {
         request.Headers.Add("apikey", _options.PublishableKey);
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _options.PublishableKey);
+        var accessToken = _authService.CurrentSession?.AccessToken;
+
+        if (string.IsNullOrWhiteSpace(accessToken))
+        {
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _options.PublishableKey);
+        }
+        else
+        {
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+        }
 
         if (includePrefer)
         {

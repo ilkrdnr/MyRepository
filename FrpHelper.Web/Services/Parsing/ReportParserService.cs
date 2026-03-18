@@ -7,6 +7,8 @@ namespace FrpHelper.Web.Services.Parsing;
 
 public sealed class ReportParserService : IReportParserService
 {
+    private static readonly string[] SqlAttributeNames = ["SelectCommand", "SQL.Text"];
+
     public async Task<FrpReportDocument> ParseAsync(string fileName, Stream fileStream, CancellationToken cancellationToken = default)
     {
         using var memoryStream = new MemoryStream();
@@ -108,21 +110,25 @@ public sealed class ReportParserService : IReportParserService
             string.Equals(node.Name.LocalName, "ReportInfo", StringComparison.OrdinalIgnoreCase));
 
         var reportName =
+            GetAttributeValue(root, "ReportOptions.Name") ??
             GetAttributeValue(root, "ReportName", "Name", "Alias") ??
             GetAttributeValue(reportInfo, "Name") ??
             Path.GetFileNameWithoutExtension(fileName) ??
             fileName;
 
         var reportCode =
+            GetAttributeValue(root, "ReportOptions.CodeName", "CodeName") ??
             GetAttributeValue(root, "ReportCode", "Code", "Alias") ??
             GetAttributeValue(reportInfo, "Code") ??
-            string.Empty;
+            (Path.GetFileNameWithoutExtension(fileName) ?? string.Empty);
 
         var createdAtRaw =
+            GetAttributeValue(root, "ReportOptions.CreateDate") ??
             GetAttributeValue(reportInfo, "Created") ??
             GetAttributeValue(root, "Created");
 
         var modifiedAtRaw =
+            GetAttributeValue(root, "ReportOptions.LastChange") ??
             GetAttributeValue(reportInfo, "Modified") ??
             GetAttributeValue(root, "Modified");
 
@@ -138,7 +144,7 @@ public sealed class ReportParserService : IReportParserService
     private static List<ReportSqlSection> ReadSqlSections(XDocument document)
     {
         var sqlElements = document.Descendants()
-            .Where(static element => !string.IsNullOrWhiteSpace(GetAttributeValue(element, "SelectCommand")))
+            .Where(static element => !string.IsNullOrWhiteSpace(GetSqlText(element)))
             .ToList();
 
         var sections = new List<ReportSqlSection>();
@@ -147,13 +153,13 @@ public sealed class ReportParserService : IReportParserService
         {
             var element = sqlElements[i];
             var title =
-                GetAttributeValue(element, "Name", "Alias", "TableName", "ReferenceName") ??
+                GetAttributeValue(element, "UserName", "Name", "Alias", "TableName", "ReferenceName") ??
                 $"SQL {i + 1}";
 
             sections.Add(new ReportSqlSection
             {
                 Title = title,
-                Content = GetAttributeValue(element, "SelectCommand") ?? string.Empty
+                Content = GetSqlText(element) ?? string.Empty
             });
         }
 
@@ -162,17 +168,29 @@ public sealed class ReportParserService : IReportParserService
 
     private static List<ReportScriptSection> ReadScriptSections(XDocument document)
     {
+        var rootScript = GetAttributeValue(document.Root, "ScriptText.Text");
+
         var scriptNodes = document.Descendants()
             .Where(static element => string.Equals(element.Name.LocalName, "ScriptText", StringComparison.OrdinalIgnoreCase))
             .ToList();
 
         var sections = new List<ReportScriptSection>();
 
-        for (var i = 0; i < scriptNodes.Count; i++)
+        if (!string.IsNullOrWhiteSpace(rootScript))
         {
             sections.Add(new ReportScriptSection
             {
-                Title = $"Pascal Script {i + 1}",
+                Title = "Pascal Script 1",
+                Content = rootScript
+            });
+        }
+
+        for (var i = 0; i < scriptNodes.Count; i++)
+        {
+            var titleIndex = sections.Count + 1;
+            sections.Add(new ReportScriptSection
+            {
+                Title = $"Pascal Script {titleIndex}",
                 Content = scriptNodes[i].Value
             });
         }
@@ -187,6 +205,20 @@ public sealed class ReportParserService : IReportParserService
         }
 
         return sections;
+    }
+
+    private static string? GetSqlText(XElement element)
+    {
+        var value = GetAttributeValue(element, SqlAttributeNames);
+        if (!string.IsNullOrWhiteSpace(value))
+        {
+            return value;
+        }
+
+        var dynamicSqlAttribute = element.Attributes().FirstOrDefault(static attribute =>
+            attribute.Name.LocalName.Contains("SQL.Text", StringComparison.OrdinalIgnoreCase));
+
+        return dynamicSqlAttribute?.Value;
     }
 
     private static string? GetAttributeValue(XElement? element, params string[] attributeNames)
@@ -214,11 +246,63 @@ public sealed class ReportParserService : IReportParserService
             return null;
         }
 
+        if (DateTimeOffset.TryParse(value, new CultureInfo("tr-TR"), DateTimeStyles.AssumeLocal, out var parsedTr))
+        {
+            return parsedTr;
+        }
+
         if (DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal, out var parsed))
         {
             return parsed;
         }
 
+        if (TryParseOaDate(value, out var oaDate))
+        {
+            return new DateTimeOffset(DateTime.SpecifyKind(oaDate, DateTimeKind.Local));
+        }
+
         return null;
+    }
+
+    private static bool TryParseOaDate(string value, out DateTime oaDate)
+    {
+        oaDate = default;
+
+        var candidates = new[]
+        {
+            value,
+            value.Replace(",", ".", StringComparison.Ordinal),
+            value.Replace(".", ",", StringComparison.Ordinal)
+        };
+
+        var cultures = new[]
+        {
+            CultureInfo.InvariantCulture,
+            new CultureInfo("tr-TR"),
+            CultureInfo.CurrentCulture
+        };
+
+        foreach (var candidate in candidates)
+        {
+            foreach (var culture in cultures)
+            {
+                if (!double.TryParse(candidate, NumberStyles.Float | NumberStyles.AllowThousands, culture, out var oaNumber))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    oaDate = DateTime.FromOADate(oaNumber);
+                    return true;
+                }
+                catch
+                {
+                    // Ignore invalid OADate values and continue trying.
+                }
+            }
+        }
+
+        return false;
     }
 }

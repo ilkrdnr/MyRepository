@@ -1,0 +1,91 @@
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+
+<div id="@_editorId" class="monaco-host" style="height:@Height"></div>
+
+@code {
+    [Parameter]
+    public string Value { get; set; } = string.Empty;
+
+    [Parameter]
+    public EventCallback<string> ValueChanged { get; set; }
+
+    [Parameter]
+    public string Language { get; set; } = "sql";
+
+    [Parameter]
+    public bool ReadOnly { get; set; }
+
+    [Parameter]
+    public string Height { get; set; } = "240px";
+
+    private readonly string _editorId = $"monaco-{Guid.NewGuid():N}";
+    private DotNetObjectReference<MonacoEditor>? _dotNetRef;
+    private bool _isInitialized;
+    private string _lastKnownValue = string.Empty;
+    private string _lastKnownLanguage = string.Empty;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+        {
+            return;
+        }
+
+        _dotNetRef = DotNetObjectReference.Create(this);
+        _lastKnownValue = Value ?? string.Empty;
+        _lastKnownLanguage = Language;
+
+        await JS.InvokeVoidAsync(
+            "frpMonaco.create",
+            _editorId,
+            _lastKnownValue,
+            _lastKnownLanguage,
+            ReadOnly,
+            _dotNetRef);
+
+        _isInitialized = true;
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!_isInitialized)
+        {
+            _lastKnownValue = Value ?? string.Empty;
+            _lastKnownLanguage = Language;
+            return;
+        }
+
+        var currentValue = Value ?? string.Empty;
+        if (!string.Equals(currentValue, _lastKnownValue, StringComparison.Ordinal))
+        {
+            _lastKnownValue = currentValue;
+            await JS.InvokeVoidAsync("frpMonaco.setValue", _editorId, currentValue);
+        }
+
+        if (!string.Equals(Language, _lastKnownLanguage, StringComparison.OrdinalIgnoreCase))
+        {
+            _lastKnownLanguage = Language;
+            await JS.InvokeVoidAsync("frpMonaco.setLanguage", _editorId, Language);
+        }
+
+        await JS.InvokeVoidAsync("frpMonaco.setReadOnly", _editorId, ReadOnly);
+    }
+
+    [JSInvokable]
+    public async Task NotifyValueChanged(string value)
+    {
+        _lastKnownValue = value;
+        await ValueChanged.InvokeAsync(value);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_isInitialized)
+        {
+            await JS.InvokeVoidAsync("frpMonaco.dispose", _editorId);
+        }
+
+        _dotNetRef?.Dispose();
+    }
+}
